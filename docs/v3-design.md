@@ -1,12 +1,14 @@
-<!-- @三司会审 v3.0 · 8-10 · 待审 -->
+<!-- @三司会审 v3.1 · 8-10 · 已审（部分）· 锡哥 17:31+17:47 拍板 -->
 
-# browser-automation-platform (BAP) · v3.0 设计方案
+# browser-automation-platform (BAP) · v3.1 设计方案
 
 > **锡哥 10 答拍板**（8-10 16:16）：
 > 1A 名字 · 2A 位置 · 3D 总控名(hub) · 4A 上下文共享 · 5A rbscript · 6A CLI 调用 ·
 > 7A humanizer 独立 · 8A 版本号 · 9A monorepo · 10A 先方案后实施
 >
 > **锡哥 16:50 拍板**：本文档不写代码实例。代码示例一律在 `docs/references/`，修改本文不需要重复修改 references/。
+>
+> **锡哥 17:31 + 17:47 拍板（v3.1 调整）**：9 子 skill 缩为 6（保留 monitor）+ state-mgr 拆解为 operator + state-tool + 合并 anti-detect → humanizer。详见 §4 + §6 + §13。
 
 ---
 
@@ -147,26 +149,49 @@
 
 ---
 
-## 4. 子 skill 清单（9 个）
+## 4. 子 skill 清单（6 个 · v3.1 锡哥拍板）
 
-### 4.1 3 核心（锡哥明确要）
+> **锡哥 8-10 17:31 拍板**：9 个 → 6 个（B 方案 + 保留 monitor）
+> **锡哥 8-10 17:47 拍板**：合并 3 个 + state-mgr 拆解
+> **合并详情**：runner → hub · extractor → operator · anti-detect → humanizer · state-mgr 拆为 cookies 操作（归 operator）+ state 文件管理（独立小工具 `state-tool`）
+
+### 4.1 6 个子 skill（锡哥拍板版）
 
 | # | 子 skill | 职责 | CLI 入口 | 核心 action |
 |---|---|---|---|---|
 | 1 | **browser-connector** | 浏览器接入 | `browser-connector` | discover / connect / list / test / warmup |
-| 2 | **browser-operator** | 浏览器操作 | `browser-operator` | nav / click / type / shot / source / text / eval / cookies + 26+10 |
-| 3 | **browser-runner** | 工作流执行 | `browser-runner` | run / validate / template |
+| 2 | **browser-operator** | 浏览器操作 + 数据提取 + cookie 管理 | `browser-operator` | nav / click / type / shot / extract / cookies + 26+10 |
+| 3 | **browser-hub** | 总控 + rbscript 执行 | `browser-hub` | run / validate / template / schedule |
+| 4 | **browser-humanizer** | 人类行为 + 反爬指纹 | `browser-humanizer` | delay / drag / stealth / profile |
+| 5 | **browser-recorder** | 轨迹录制 + 回放 | `browser-recorder` | start / stop / replay / library |
+| 6 | **browser-monitor** | 长跑监控 + 告警 | `browser-monitor` | watch / detect / alert |
 
-### 4.2 6 进阶（锡哥"等等各种独立功能"）
+### 4.2 1 个独立小工具（state-mgr 拆解）
 
-| # | 子 skill | 职责 | CLI 入口 | 核心 action |
-|---|---|---|---|---|
-| 4 | **browser-humanizer** | 人类行为模拟 | `browser-humanizer` | delay / drag / move-along / type-typo / profile |
-| 5 | **browser-anti-detect** | 反爬指纹 | `browser-anti-detect` | stealth / rotate-fp / check-detect |
-| 6 | **browser-recorder** | 轨迹录制 | `browser-recorder` | start / stop / replay / library |
-| 7 | **browser-extractor** | 数据提取 | `browser-extractor` | extract / template / schema |
-| 8 | **browser-state-mgr** | 状态管理 | `browser-state-mgr` | cookies-export / cookies-import / login / state |
-| 9 | **browser-monitor** | 监控 | `browser-monitor` | watch / detect / alert |
+| # | 工具 | 职责 | 来源 |
+|---|---|---|---|
+| 7 | **state-tool** | state 文件管理（导出/导入/迁移）| 原 state-mgr 拆解（cookies 归 operator）|
+
+> **为何拆 state-tool**：state 文件管理 ≠ 浏览器功能，**是文件系统功能**。只装 operator 会污染职责，独立小工具避免越界。
+
+### 4.3 合并决策表（备案）
+
+| 原 skill | 合并到 | 理由 |
+|---|---|---|
+| runner | hub | rbscript 解析 = hub 子模块；独立 = 多一跳 |
+| extractor | operator | 数据提取本质 = 操作结果格式化 |
+| anti-detect | humanizer | 都是"让浏览器不像脚本"（行为 + 指纹同源）|
+| state-mgr (cookies) | operator | cookies 操作已经在 operator.action |
+| state-mgr (file) | state-tool | 文件管理 ≠ 浏览器功能 |
+
+### 4.4 v3.0 → v3.1 变化
+
+| 维度 | v3.0 | v3.1 |
+|---|---|---|
+| skill 数 | 9 | 6 |
+| 独立小工具 | 0 | 1（state-tool）|
+| 总模块 | 9 | 7 |
+| 实施工时估算 | 62h | **75h**（重新计算，原估偏低）|
 
 ---
 
@@ -189,28 +214,9 @@
 
 ---
 
-## 段 1 结束
+## 段 1 结束（8-10 v3.1 已合并段 1 + 段 2 · 本节删除）
 
-**段 2 将包含**：
-- §6 子 skill 详细设计（9 个）
-- §7 rbscript 完整语法 + schema
-- §8 浏览器配置 browsers.yaml
-- §9 26+10 action 详细清单
-- §10 人类模拟 + 反爬细节
-- §11 5 个内置工作流模板
-- §12 实施阶段 P1-P12（60+ 小时工作量）
-- §13 决策记录 + 风险
-
-锡哥看完段 1 告诉我"继续"或"调整"，我立刻发段 2。
-
----
-
-_本方案 v3.0 · 段 1 · 8-10 16:18 · 待三司会审_<!-- @三司会审 v3.0 · 8-10 · 待审 -->
-
-# browser-automation-platform (BAP) · v3.0 设计方案 · 段 2（详细设计 + 实施）
-
-> **接段 1**：5 章基础架构已发，本段含 §6-§13 完整细节
-> **锡哥 10 答拍板**：1A 名字 · 2A 位置 · 3D hub · 4A context.json · 5A rbscript · 6A CLI · 7A humanizer · 8A 版本号 · 9A monorepo · 10A 先方案后实施
+锡哥 8-10 17:47 拍板 9 子 skill 缩为 6 个。
 
 ---
 
@@ -220,156 +226,136 @@ _本方案 v3.0 · 段 1 · 8-10 16:18 · 待三司会审_<!-- @三司会审 v3.
 
 **职责**：浏览器发现 / 连接 / 健康检查 / 预热
 
-**目录结构**：
-**CLI 设计**：
-**核心配置文件 `config/browsers.yaml`**（YAML · 锡哥 v3.0 已选）：
-**启动校验**：
-- 启动时 `jq` 用 `browsers.schema.yaml` 校验 `browsers.yaml`
-- 失败报错退出（不静默吞错）
-- 5 类常见校验失败：缺 name/image 字段、driver 缺 endpoint、占位符未替换、JSON 语法错、浏览器名重复
+**CLI 入口**：`browser-connector <action>` · 完整接口见 `references/schemas/browsers.example.yaml` + `references/install.sh.example §connector 段`
+
+**核心 action**：
+- `discover` — 自动发现本机/网络中浏览器（CDP / WebDriver 端口扫描）
+- `connect` — 连接指定浏览器（xiaobai / dasheng）
+- `list` — 列出已注册浏览器
+- `test` — 健康检查（ping / 截图）
+- `warmup` — 预热（启动空闲浏览器实例）
+
+**配置文件 `config/browsers.yaml`**：
+- 完整示例见 `references/schemas/browsers.example.yaml`
+- 启动时 `yq` 校验 schema（fail-fast）
+
+**错误码**：E001-E008（CDP 连接失败 / 浏览器未注册 / 端口占用 / 等）
 
 ---
 
 ### 6.2 browser-operator（操作层 · 26+10 action）
 
-**职责**：浏览器所有操作 action（核心高频使用）
+**职责**：浏览器所有操作 action + 数据提取 + cookie 管理（v3.1 合并 extractor + state-mgr cookies）
 
-**目录结构**：
-**36 个 action（5 大类）**：
+**CLI 入口**：`browser-operator <action>` · 完整 action 清单见 `references/install.sh.example §operator 段`
 
-> **注意**：F 类（人类模拟 10 个）实际归属 `browser-humanizer` skill（第 6.4），operator 不重复实现。operator 主要负责 A-E 类 26 个。
+**核心 action**：
+- A. 导航类（4 个）：nav / back / forward / reload
+- B. 交互类（8 个）：click / type / hover / scroll / select / focus / blur / clear
+- C. 提取类（v3.1 新增 · 4 个）：extract / extract-css / extract-xpath / extract-regex
+- D. Cookie 类（v3.1 新增 · 4 个）：cookies-get / cookies-set / cookies-clear / cookies-export
+- E. 状态类（5 个）：shot / source / text / eval / wait
+- F. 模板类（v3.1 新增 · 1 个）：extract-template（从 YAML 模板提取）
 
----
+**总计**：26 + 7（v3.1 新增提取 4 + cookie 3）= **33 action**
 
-### 6.3 browser-runner（脚本执行层）
-
-**职责**：解析并执行 rbscript 工作流（实际是 hub 的执行引擎，但暴露 CLI 单独调试）
-
-**目录结构**：
-**CLI 完整接口**：
-**核心算法（rbscript_parser.sh）**：
-**错误码**：
-| code | 含义 | 恢复策略 |
-|---|---|---|
-| `E001` | YAML 语法错 | 报错退出 · 不重试 |
-| `E002` | schema 校验失败 | 报错退出 + 指出哪个字段 |
-| `E003` | 循环依赖（DAG 不闭合）| 报错退出 + 路径 |
-| `E004` | step 缺 skill 或 action | 报错退出 |
-| `E005` | 期望断言失败 | 按 `on_fail` 配置处理 |
-| `E006` | 重试超过 max | 按 `on_fail` 配置处理 |
-| `E007` | 变量未定义 | 报错退出 + 指出哪个变量 |
-| `E008` | 子 skill 调用超时 | 按 retry 配置处理 |
-
-> **为什么 runner 单独 skill**：rbscript 解析 + 工作流调度是个**独立能力**，未来还能扩展 Taskfile / Just 的支持。锡哥 v3.0 决定 rbscript 是主选，所以 runner 围绕 rbscript 设计。
+**错误码**：OP001-OP010
 
 ---
 
-### 6.4 browser-humanizer（人类行为模拟）
+### 6.3 browser-hub（总控层 · v3.1 合并 runner）
 
-**职责**：随机延迟 / 鼠标轨迹 / 滑条拖动 / 行为画像 / 轨迹录制
+**职责**：rbscript 工作流执行 + 上下文共享 + 子 skill 编排
 
-**目录结构**：
-**CLI 完整接口**：
-**行为画像示例**：
-**drag 算法详解**（滑条验证码专杀）：
-**错误码**：
-| code | 含义 |
-|---|---|
-| `H001` | 行为画像不存在 |
-| `H002` | selector 找不到元素 |
-| `H003` | 浏览器 session 丢失 |
-| `H004` | 拖动起点/终点不在同一 viewport |
+**CLI 入口**：`browser-hub <action>`
 
----
+**核心 action**：
+- `run <file.rbs>` — 执行 rbscript 工作流
+- `validate <file.rbs>` — 用 schema 校验（不执行）
+- `template <name>` — 生成模板（weibo-login / bilibili-up / 等）
+- `schedule` — 计划任务（cron 形式）
+- `list` — 列出已注册工作流
+- `state` — 显示当前 context.json
 
-### 6.5 browser-anti-detect（反爬指纹）
+**rbscript 解析器**（v3.1 关键）：
+- 完整语法见 §7
+- 5 个内置模板见 `references/examples/*.rbs`
 
-**职责**：webdriver 标志隐藏 / fingerprint 随机化 / 检测规避
-
-**目录结构**：
-**CLI 完整接口**：
-**指纹模板示例（windows-chrome.yaml）**：
-**反检测插件（webdriver-hide.js）**：
-**错误码**：
-| code | 含义 |
-|---|---|
-| `AD001` | 指纹模板不存在 |
-| `AD002` | 插件注入失败（浏览器版本不兼容）|
-| `AD003` | 检测页面访问失败 |
-| `AD004` | 注入后还是被检测到（需调整指纹）|
+**错误码**：H001-H008（DAG 不闭合 / 期望失败 / 重试超限 / 等）
 
 ---
 
-### 6.6 browser-recorder（轨迹录制）
+### 6.4 browser-humanizer（人类行为 + 反爬指纹 · v3.1 合并 anti-detect）
 
-**职责**：录制真实人类操作轨迹 · 回放（用于锡哥手动操作一次后，后续脚本自动重放）
+**职责**：随机延迟 / 鼠标轨迹 / 滑条拖动 / 行为画像 / **指纹 stealth**（v3.1 新增）
 
-**目录结构**：
-**CLI 完整接口**：
-**录制格式（library/weibo-login.json）**：
-**convert-to-rbscript 能力**（锡哥意外收获）：
-**错误码**：
-| code | 含义 |
-|---|---|
-| `R001` | 录制未启动 |
-| `R002` | 浏览器断连（录制中）|
-| `R003` | 录制库不存在 |
-| `R004` | 回放步骤超界 |
+**CLI 入口**：`browser-humanizer <action>`
 
----
+**核心 action**：
+- A. 行为类（4 个）：delay / move-along / drag / type-typo
+- B. 画像类（1 个）：profile（生成/加载行为画像）
+- C. 指纹类（v3.1 新增 · 3 个）：stealth / rotate-fp / check-detect
 
-### 6.7 browser-extractor（数据提取）
+**指纹模板**：完整模板见 `references/schemas/fingerprint.example.yaml`
 
-**职责**：结构化数据提取 · 模板化 · 输出标准化（Markdown / JSON / CSV）
-
-**目录结构**：
-**CLI 完整接口**：
-**模板示例（wechat-article.yaml）**：
-**错误码**：
-| code | 含义 |
-|---|---|
-| `EX001` | 模板不存在 |
-| `EX002` | 必需字段提取失败 |
-| `EX003` | 转换函数错误（如 datetime_iso 解析失败）|
-| `EX004` | 输出格式不支持 |
-| `EX005` | 批量任务部分失败 |
+**错误码**：HM001-HM006
 
 ---
 
-### 6.8 browser-state-mgr（状态管理）
+### 6.5 browser-recorder（轨迹录制）
 
-**职责**：cookie 备份/恢复 / 登录态搬运 / 多设备登录同步
+**职责**：录制真实人类操作轨迹 · 回放 · **convert-to-rbscript**（锡哥意外收获）
 
-**目录结构**：
-**CLI 完整接口**：
-**状态文件格式（states/weibo.json）**：
-**错误码**：
-| code | 含义 |
-|---|---|
-| `S001` | 浏览器未连接 |
-| `S002` | Cookie 导出失败 |
-| `S003` | Cookie 导入被拒绝（域名不匹配）|
-| `S004` | 自动登录验证码无法绕过 |
-| `S005` | 两步验证需人工 |
-| `S006` | 状态文件损坏 |
+**CLI 入口**：`browser-recorder <action>`
+
+**核心 action**：
+- `start` — 开始录制（绑定到指定浏览器）
+- `stop` — 停止录制，保存到 library/
+- `replay <name>` — 回放录制
+- `library` — 列出所有录制
+- `convert-to-rbscript <name>` — **v3.1 新增**：录制转 rbscript 工作流
+
+**录制格式**：library/*.json · 示例见 `references/examples/bilibili-up.rbs`（含 trace 段）
+
+**错误码**：R001-R004
 
 ---
 
-### 6.9 browser-monitor（监控）
+### 6.6 browser-monitor（监控）
 
 **职责**：长跑任务监控 / 反爬检测告警 / 日志聚合 / QQ Bot 告警推送
 
-**目录结构**：
-**CLI 完整接口**：
-**告警规则示例（rules/captcha-detected.yaml）**：
-**告警规则示例（rules/ip-banned.yaml）**：
-**错误码**：
-| code | 含义 |
-|---|---|
-| `M001` | 监控目标不在线 |
-| `M002` | 告警渠道不可用（QQ Bot 断连）|
-| `M003` | 检测器误报 |
-| `M004` | 告警抑制中 |
+**CLI 入口**：`browser-monitor <action>`
+
+**核心 action**：
+- `watch` — 监控浏览器状态 + 网络流量
+- `detect` — 检测反爬事件（验证码 / IP 封禁 / 等）
+- `alert` — 配置告警规则（QQ Bot / webhook）
+
+**告警规则**：完整规则见 `references/examples/rbs-captcha-detected.rbs`
+
+**错误码**：M001-M004
+
+---
+
+### 6.7 state-tool（独立小工具 · v3.1 拆解自 state-mgr）
+
+**职责**：state 文件管理（导出/导入/迁移）· **不是浏览器功能**，是文件系统功能
+
+**CLI 入口**：`state-tool <action>`
+
+**核心 action**：
+- `export <profile>` — 导出 state 文件（zip）
+- `import <file.zip>` — 导入 state 文件
+- `migrate <from> <to>` — 不同设备间迁移
+- `list` — 列出所有 state profile
+
+**为什么独立**：
+1. state 文件管理 ≠ 浏览器操作（属于文件系统层）
+2. 强类型校验（JSON Schema），独立测试
+3. 不污染 operator 的职责单一
+
+**错误码**：ST001-ST004
 
 ---
 
@@ -499,13 +485,16 @@ _本方案 v3.0 · 段 1 · 8-10 16:18 · 待三司会审_<!-- @三司会审 v3.
 | # | 风险 | 缓解 |
 |---|---|---|
 | **1** | hub vs Selenium Hub 撞名 | §1.3 专门说明 + ADR-002 记录 |
-| **2** | 9 个 skill 太多，认知负担重 | install.sh 默认全装；文档分"必读" + "选读" |
-| **3** | rbscript 解析复杂度 | 用 jq 解析 YAML（成熟工具）；schema 校验 |
+| **2** | v3.0 9 个 skill 太多 | v3.1 缩为 6 个（锡哥 8-10 17:31 拍板） |
+| **3** | rbscript 解析复杂度 | 用 yq 解析 YAML（成熟工具）；schema 校验 |
 | **4** | context.json 文件冲突 | 加锁机制（`/tmp/bap-context.lock`）|
 | **5** | 大圣 60 秒启动 | connector warmup 子命令 + browser warmup 默认 hook |
 | **6** | CLI 调子 skill 慢（每次启动 Python）| 用 `python -m xxx` 模块复用，或缓存解释器 |
 | **7** | 多子 skill 装到 `~/.agents/skills/` 污染 | 软链接方案 · 项目 git pull 自动更新 |
-| **8** | 62 小时工作量太大 | MVP 30h 优先（§9.3）|
+| **8** | v3.0 估 62h / 实际 75h+ | v3.1 重估为 75h（MVP 38h） |
+| **9** 🆕 | operator 合 extractor 后变重（33 action）| 未来如 >40 action 再拆；v3.1 先观察 |
+| **10** 🆕 | state-tool 独立增加认知负担 | state-tool 仅 4 action，且只面向 state 文件场景 |
+| **11** 🆕 | humanizer 合 anti-detect 后变重 | stealth + rotate-fp + check-detect 三个 action，v3.1 先观察 |
 
 ---
 
@@ -544,23 +533,41 @@ _本方案 v3.0 · 段 1 · 8-10 16:18 · 待三司会审_<!-- @三司会审 v3.
 3. **可调试**：单独调 `browser-operator shot ...` 验证
 4. **易测试**：mock CLI 输出而非 mock Python 对象
 
+### ADR-005 为什么 v3.1 缩到 6 个 skill（v3.1 锡哥拍板）
+**决策**：从 9 子 skill 缩为 6 skill + 1 小工具
+**原因**：
+1. **成本递减**：9 SKILL.md 维护成本高 · 锡哥记忆负担重 · 9 个 trigger 词难记
+2. **职责重整**：recorder / extractor / state-mgr / anti-detect 都存在"职责拆分过度"问题
+3. **人机友好**：6 trigger 词（connector / operator / hub / humanizer / recorder / monitor）+ 1 工具（state-tool）最符合锡哥记忆习惯
+4. **合并逻辑**：
+   - runner → hub（rbscript 解析是 hub 子模块）
+   - extractor → operator（提取 = 操作结果格式化）
+   - anti-detect → humanizer（都是"不像脚本"· 行为 + 指纹同源）
+   - state-mgr 拆解（cookies 归 operator · 文件管理独立 state-tool）
+5. **保留逻辑**：monitor 保留（锡哥 17:31 拍板，用于长跑任务）
+
 ---
 
-## 13. 锡哥下一步
+## 13. 锡哥下一步（v3.1 已部分拍板）
 
-锡哥看完整文档（§1-§12）后告诉我：
+**锡哥 8-10 拍板记录**：
+
+| # | 决策 | 拍板 | 时间 |
+|---|---|---|---|
+| **1** | 9 子 skill 缩为 6 | ✅ C（6 个）| 17:31 |
+| **2** | 合并细节（runner/extractor/anti-detect/state-mgr）| ✅ B（同意我的建议）| 17:47 |
+| **3** | rbscript 自研 vs Taskfile | ⏳ 待拍板 | — |
+| **4** | 开工时机 | ⏳ 待拍板 | — |
+
+**锡哥选后续 2 项，我立刻按方案开工**：
 
 | # | 决策 | 选项 |
 |---|---|---|
-| **A. 方案是否通过** | A. 通过 · B. 还要改（指出哪段）· C. 推倒重来 |
-| **B. 实施节奏** | A. MVP 30h（4 天）· B. 完整 62h（8 天）· C. 砍到 27h（3.5 天）|
-| **C. 开始时间** | A. 这次会话开 P1 · B. 下一会话开 · C. 暂停 |
-| **D. 是否走三司会审** | A. 是（强制）· B. 这次直接开（已两次走完）|
-
-锡哥选 4 项，我立刻按方案开工。
+| **A. rbscript 路线** | A. 自研 rbscript（锡哥原拍板·v3.0）· B. 改用 Taskfile + yq（节省 ~10h）· C. 先 Taskfile + 后期可迁移 |
+| **B. 开工时机** | A. 这次会话开 P1 · B. 下一会话开 · C. 暂停 · D. 修完 v3.1 残留问题后再开 |
 
 ---
 
-_本方案 v3.0 · 8-10 16:52 · 精简版（代码移 references/）· 待三司会审_
+_本方案 v3.1 · 8-10 17:50 · 6 子 skill + 1 小工具 · 待第 3 问拍板_
 
 **总字数**：段 1 (12.7KB) + 段 2 (18KB) = **30.7KB**
