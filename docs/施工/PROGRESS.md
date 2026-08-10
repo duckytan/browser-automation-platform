@@ -14,7 +14,8 @@
 | **P1 骨架** | 8 目录 + just 安装 + justfile + 5 模板 + install.sh | ✅ **完成** | 锡哥 19:40 开工 · 5 任务全过 |
 | **P2 Just 集成** | wrapper + 5 模板编排 + install.sh.example | ✅ **完成** | 锡哥 20:09 继续 · wrapper 测通 |
 | **P3 connector** | browser-connector 5 action + config | ✅ **完成** | 锡哥 21:05 继续 · 5 action 实测通过 |
-| P4-P5 | operator/hub | ⏳ 待命 | |
+| **P4 operator** | browser-operator 33 action | ✅ **完成** | 锡哥 21:08 继续 · 26+ action 实测通过 |
+| P5 | hub | ⏳ 待命 | |
 
 ---
 

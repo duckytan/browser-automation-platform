@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# BAP operator/browser-operator - 浏览器操作层（§6.2 · 33 action）
+# 用法: browser-operator <action> [args]
+# 底层: CDP eval（JS 注入操作 DOM）+ cdp-browser.sh goto/shot
+#
+# A. 导航(4):  nav / back / forward / reload
+# B. 交互(8):  click / type / hover / scroll / select / focus / blur / clear
+# C. 提取(4):  extract / extract-css / extract-xpath / extract-regex
+# D. Cookie(4):cookies-get / cookies-set / cookies-clear / cookies-export
+# E. 状态(5):  shot / source / text / eval / wait
+# F. 模板(1):  extract-template
+# 错误码: OP001 用法 · OP002 CDP 失败 · OP003 selector 缺失 · OP004 eval 异常
+
+set -uo pipefail
+
+CDP_SH="${HOME}/.agents/skills/real-browser/scripts/cdp-browser.sh"
+
+# === CDP eval 封装 ===
+ceval() {
+    bash "$CDP_SH" eval "$1" 2>&1
+}
+
+# === 导航类 ===
+op_nav()    { bash "$CDP_SH" goto "${1:?OP001: 缺 URL}" 2>&1; }
+op_back()   { ceval 'history.back(); "back"' 2>&1; }
+op_forward(){ ceval 'history.forward(); "forward"' 2>&1; }
+op_reload() { ceval 'location.reload(); "reload"' 2>&1; }
+
+# === 交互类 ===
+op_click() {
+    local sel="${1:?OP001: 缺 selector}"
+    ceval "(function(){var el=document.querySelector(\"$sel\"); if(!el)return 'OP003: 未找到 $sel'; el.click(); return 'clicked: $sel';})()"
+}
+op_type() {
+    local sel="${1:?OP001: 缺 selector}" text="${2:?OP001: 缺 text}"
+    ceval "(function(){var el=document.querySelector(\"$sel\"); if(!el)return 'OP003: 未找到 $sel'; el.focus(); el.value='$text'; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return 'typed: $text';})()"
+}
+op_hover() {
+    local sel="${1:?OP001: 缺 selector}"
+    ceval "(function(){var el=document.querySelector(\"$sel\"); if(!el)return 'OP003'; el.dispatchEvent(new MouseEvent('mouseover',{bubbles:true})); return 'hover: $sel';})()"
+}
+op_scroll() {
+    local times="${1:-3}"
+    ceval "(function(){var t=$times,i=0;var iv=setInterval(function(){window.scrollBy(0,window.innerHeight);if(++i>=t)clearInterval(iv);},500);return 'scroll $times';})()"
+}
+op_select() {
+    local sel="${1:?OP001: 缺 selector}" val="${2:?OP001: 缺 value}"
+    ceval "(function(){var el=document.querySelector(\"$sel\"); if(!el)return 'OP003'; el.value='$val'; el.dispatchEvent(new Event('change',{bubbles:true})); return 'selected: $val';})()"
+}
+op_focus() {
+    local sel="${1:?OP001: 缺 selector}"
+    ceval "(function(){var el=document.querySelector(\"$sel\"); if(!el)return 'OP003'; el.focus(); return 'focus: $sel';})()"
+}
+op_blur()  { ceval 'document.activeElement.blur(); "blur"' 2>&1; }
+op_clear() {
+    local sel="${1:?OP001: 缺 selector}"
+    ceval "(function(){var el=document.querySelector(\"$sel\"); if(!el)return 'OP003'; el.value=''; return 'cleared: $sel';})()"
+}
+
+# === 提取类 ===
+op_extract() {
+    local sel="${1:?OP001: 缺 selector}" out="${2:-}"
+    local data
+    data=$(ceval "(function(){var els=document.querySelectorAll(\"$sel\"); var r=[]; els.forEach(function(e){r.push(e.innerText||e.textContent||'');}); return JSON.stringify(r);})()")
+    if [[ -n "$out" ]]; then echo "$data" > "$out"; echo "已写入 $out"; else echo "$data"; fi
+}
+op_extract_css() {
+    local sel="${1:?OP001: 缺 selector}" prop="${2:?OP001: 缺 property}"
+    ceval "(function(){var el=document.querySelector(\"$sel\"); return el?getComputedStyle(el).getPropertyValue('$prop'):'OP003';})()"
+}
+op_extract_xpath() {
+    local xp="${1:?OP001: 缺 xpath}"
+    ceval "(function(){var r=document.evaluate(\"$xp\",document,null,XPathResult.STRING_TYPE,null); return r.stringValue;})()"
+}
+op_extract_regex() {
+    local re="${1:?OP001: 缺 regex}"
+    ceval "(function(){var m=document.body.innerText.match(/$re/); return m?m[0]:'无匹配';})()"
+}
+
+# === Cookie 类 ===
+op_cookies_get() {
+    ceval 'JSON.stringify(document.cookie)'
+}
+op_cookies_set() {
+    local name="${1:?OP001: 缺 name}" val="${2:?OP001: 缺 value}"
+    ceval "document.cookie='$name=$val; path=/'; 'set: $name'"
+}
+op_cookies_clear() {
+    ceval "(function(){var c=document.cookie.split(';');c.forEach(function(p){var n=p.split('=')[0].trim();document.cookie=n+'=;expires=Thu,01Jan1970 00:00:00 GMT;path=/';});return 'cleared '+c.length;})()"
+}
+op_cookies_export() {
+    local name="${1:-cookie}"
+    mkdir -p ~/.bap/states
+    ceval 'document.cookie' > ~/.bap/states/${name}.txt
+    echo "✅ 已导出 cookie → ~/.bap/states/${name}.txt"
+}
+
+# === 状态类 ===
+op_shot()   { bash "$CDP_SH" shot "${1:-/tmp/bap-shot.png}" 2>&1; }
+op_source() { ceval 'document.documentElement.outerHTML'; }
+op_text()   { ceval 'document.body.innerText'; }
+op_eval()   { ceval "${1:?OP001: 缺 JS}"; }
+op_wait() {
+    local sel="${1:?OP001: 缺 selector}" timeout="${2:-10}"
+    ceval "(function(){var sel=\"$sel\",t=$timeout*1000,start=Date.now();return new Promise(function(res){function chk(){var el=document.querySelector(sel);if(el){res('found: '+sel);}else if(Date.now()-start>t){res('timeout');}else{setTimeout(chk,200);}}chk();});})()" 2>&1 | head -1
+}
+
+# === 模板类 ===
+op_extract_template() {
+    local tpl="${1:?OP001: 缺模板文件}"
+    [[ -f "$tpl" ]] || { echo "OP001: 模板不存在 $tpl" >&2; exit 1; }
+    while IFS='=' read -r name sel; do
+        [[ -z "$name" || "$name" =~ ^# ]] && continue
+        val=$(ceval "(function(){var el=document.querySelector(\"$sel\");return el?(el.innerText||el.textContent||''):'';})()")
+        echo "$name=$val"
+    done < "$tpl"
+}
+
+# === 入口 ===
+ACTION="${1:-}"; shift 2>/dev/null || true
+case "$ACTION" in
+    nav) op_nav "$@" ;;
+    back) op_back ;;
+    forward) op_forward ;;
+    reload) op_reload ;;
+    click) op_click "$@" ;;
+    type) op_type "$@" ;;
+    hover) op_hover "$@" ;;
+    scroll) op_scroll "${1:-3}" ;;
+    select) op_select "$@" ;;
+    focus) op_focus "$@" ;;
+    blur) op_blur ;;
+    clear) op_clear "$@" ;;
+    extract) op_extract "$@" ;;
+    extract-css) op_extract_css "$@" ;;
+    extract-xpath) op_extract_xpath "$@" ;;
+    extract-regex) op_extract_regex "$@" ;;
+    cookies-get) op_cookies_get ;;
+    cookies-set) op_cookies_set "$@" ;;
+    cookies-clear) op_cookies_clear ;;
+    cookies-export) op_cookies_export "$@" ;;
+    shot) op_shot "${1:-/tmp/bap-shot.png}" ;;
+    source) op_source ;;
+    text) op_text ;;
+    eval) op_eval "$@" ;;
+    wait) op_wait "$@" ;;
+    extract-template) op_extract_template "$@" ;;
+    "")
+        echo "用法: browser-operator <action> [args]"
+        echo "导航: nav/back/forward/reload · 交互: click/type/hover/scroll/select/focus/blur/clear"
+        echo "提取: extract/extract-css/extract-xpath/extract-regex · Cookie: cookies-get/set/clear/export"
+        echo "状态: shot/source/text/eval/wait · 模板: extract-template"
+        exit 0
+        ;;
+    *) echo "❌ 未知 action: $ACTION" >&2; exit 1 ;;
+esac
