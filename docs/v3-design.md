@@ -1,4 +1,4 @@
-<!-- @三司会审 v3.2 · 8-10 · 已审(部分)· 锡哥 17:31+17:47+18:07+18:19 拍板 -->
+<!-- @三司会审 v3.2 · 8-10 · 已审 · 圆桌 4 司(sanshi-20260810-002)· 锡哥 19:13 拍板同意整合建议 → 落地 4 司修复 -->
 
 # browser-automation-platform (BAP) · v3.2 设计方案
 
@@ -23,8 +23,8 @@
 
 | 子目录 | 内容 | 何时读 |
 |--------|------|--------|
-| `references/examples/` | 5 个完整 .rbs 工作流模板(weibo-login / bilibili-up / wechat-article / slider-captcha / batch-fetch)| 实施 P7 阶段读 |
-| `references/schemas/` | `rbscript.schema.yaml`(rbscript JSON Schema)+ `browsers.example.yaml`(浏览器注册表示例)| 实施 P3 阶段读 |
+| `references/examples/` | 5 个工作流模板(weibo-login / bilibili-up / wechat-article / slider-captcha / batch-fetch)| 实施 P2 阶段填内容 |
+| `references/schemas/` | `browsers.example.yaml`(浏览器注册表示例)| 实施 P3 阶段读 |
 | `references/install.sh.example` | 项目级安装脚本示例(含 10 个子 skill 软链接 + bap CLI 快捷方式)| 实施 P1 阶段读 |
 
 **重要约定**:未来方案讨论中如果涉及代码,只在本文档描述"做什么 / 为什么",具体实现一律写入 `references/`。修改本文档时不需要重复修改 references/ 内容。
@@ -38,8 +38,8 @@
 构建一个**围绕浏览器自动化**的综合平台,采用**总控 + 子 skill 的总分模式**--参考三司会审(总)+ 4 诀(分)的成熟架构:
 
 - **总控层**:`browser-hub`(编排层 · 项目大脑)
-- **执行层**:9 个独立子 skill(单一职责 · 可独立可用)
-- **业务层**:rbscript 工作流(多步骤任务脚本)
+- **执行层**:6 个独立子 skill + 1 工具(单一职责 · 可独立可用)
+- **业务层**:工作流(多步骤任务脚本 · Just 引擎)
 
 ### 1.2 名字含义
 
@@ -67,11 +67,9 @@
 ✅ **包含**:
 - 浏览器接入(discover / connect / health)
 - 浏览器操作(点击 / 输入 / 截图 / 26+10 action)
-- 工作流编排(rbscript · Taskfile)
-- 人类行为模拟(humanizer)
-- 反爬指纹(anti-detect)
+- 工作流编排(Just MVP · Taskfile 后期)
+- 人类行为模拟 + 反爬指纹(humanizer)
 - 轨迹录制(recorder)
-- 数据提取(extractor)
 - 状态管理(cookie / login)
 - 监控(monitor)
 
@@ -88,9 +86,9 @@
 
 **总控层**:1 个总控 skill(browser-hub),编排所有子 skill。
 
-**执行层**:9 个独立子 skill,单一职责,可独立调用。
+**执行层**:6 个独立子 skill + 1 工具,单一职责,可独立调用。
 
-**业务层**:rbscript 工作流(多步骤任务脚本)。
+**业务层**:工作流(多步骤任务脚本 · Just 引擎)。
 
 **关键关系**:
 - 总控 → 依赖 → 子 skill(hub 编排子 skill)
@@ -170,7 +168,7 @@
 |---|---|---|---|---|
 | 1 | **browser-connector** | 浏览器接入 | `browser-connector` | discover / connect / list / test / warmup |
 | 2 | **browser-operator** | 浏览器操作 + 数据提取 + cookie 管理 | `browser-operator` | nav / click / type / shot / extract / cookies + 26+10 |
-| 3 | **browser-hub** | 总控 + rbscript 执行 | `browser-hub` | run / validate / template / schedule |
+| 3 | **browser-hub** | 总控 + Just 工作流执行 | `browser-hub` | run / validate / template / schedule |
 | 4 | **browser-humanizer** | 人类行为 + 反爬指纹 | `browser-humanizer` | delay / drag / stealth / profile |
 | 5 | **browser-recorder** | 轨迹录制 + 回放 | `browser-recorder` | start / stop / replay / library |
 | 6 | **browser-monitor** | 长跑监控 + 告警 | `browser-monitor` | watch / detect / alert |
@@ -204,22 +202,78 @@
 
 ---
 
-## 5. 总控 browser-hub 设计
+## 5. 总控 browser-hub 设计(v3.2 · rbscript 作废 · Just 引擎)
 
 ### 5.1 CLI 入口
 
+`browser-hub <action> [args]` · 单入口调度子 skill
+
+| action | 用途 | 对应子 skill |
+|---|---|---|
+| `run <name>` | 执行工作流(调 Just recipe)| hub |
+| `validate <name>` | 校验 justfile / 配置 | hub |
+| `template <name>` | 生成工作流模板 | hub |
+| `connect <browser>` | 接入浏览器 | connector |
+| `operate <action> [args]` | 浏览器操作 | operator |
+| `humanize <action>` | 人类行为/指纹 | humanizer |
+| `record <action>` | 轨迹录制 | recorder |
+| `watch <action>` | 监控告警 | monitor |
+| `state <action>` | 状态管理 | state-tool |
+| `schedule` | 计划任务(cron 形式)| hub |
+| `list` | 列出已注册工作流 | hub |
+
+> **v3.2 变更**:不再有 `run <file.rbs>`(rbscript 作废)→ 改为 `run <name>` 调 Just recipe(`justfile` 中的 recipe)。
+
 ### 5.2 上下文共享机制(context.json)
+
+**位置**:`~/.bap/context/current.json`(全局单例)
+
+**结构**:
+```json
+{
+  "workflow": "weibo-login",
+  "browser": {"profile": "xiaobai", "cdp": "172.22.0.1:19222"},
+  "vars": {"username": "...", "step_index": 3},
+  "cookies": {"path": "~/.bap/states/cookies/weibo.json"},
+  "logs": ["step1 ok", "step2 ok"]
+}
+```
+
+**读写规则**:
+- 子 skill 通过 `~/.bap/context/current.json` 读写共享状态
+- **互斥锁**:`/tmp/bap-context.lock`(风险 #4 已认)· 多会话并发时一个工作流等待锁
+- 写后必须 `fsync`(防掉电丢数据)
+- 会话结束清理 context.json(避免残留污染下个工作流)
 
 ### 5.3 子 skill 调用协议
 
-### 5.4 错误恢复策略
+**调用方式**:hub 通过 CLI 调子 skill · 子 skill 通过 CLI 调浏览器/引擎
 
-| step 失败 | 默认行为 | 可配置 |
+```
+hub → (CLI) → connector/operator/humanizer/recorder/monitor/state-tool
+                 ↓ (CLI)
+              browser(CDP/WebDriver)+ just(工作流)
+```
+
+**参数传递**:
+1. 子 skill 入口读 `context.json` 拿全局状态
+2. 额外参数经 CLI 参数传入(`--browser=xiaobai --timeout=30`)
+3. 子 skill 结果写回 `context.json`(结构见 §5.2)
+
+**退出码**:0=成功 · 1=业务失败 · 2=参数错误 · 3=依赖缺失(just/browser 未装)
+
+**返回格式**:统一 JSON(`{status, data, error}`)· 便于 AI 解析
+
+### 5.4 错误恢复策略(Just 原生 + bash wrapper)
+
+> **v3.2 变更**:Just 无 `on_fail`/`fallback_skill` 字段(非原生)· 错误处理由 `engines/` bash wrapper(`retry.sh`/`expect.sh`)实现,见 §7.4。
+
+| step 失败 | 默认行为 | 实现方式 |
 |---|---|---|
-| **non-critical step** | skip + 警告 | `on_fail: skip` |
-| **critical step** | halt + 报错 | `on_fail: halt` |
-| **retry step** | 重试 N 次 + backoff | `retry: {max: 3, backoff: exponential}` |
-| **fallback skill** | 切换到备用 skill | `fallback_skill: anti-detect` |
+| **non-critical step** | skip + 警告 | wrapper 捕获非零退出码 → 记录 + 继续 |
+| **critical step** | halt + 报错 | wrapper 检查退出码 → 中断并返回错误 JSON |
+| **retry step** | 重试 N 次 + backoff | `engines/retry.sh`(`--retries 3 --backoff exponential`)|
+| **fallback** | 切备用能力 | 工作流层自定义(非 skill 字段)· 如验证码检测触发 humanizer |
 
 ---
 
@@ -272,23 +326,24 @@
 
 ---
 
-### 6.3 browser-hub(总控层 · v3.1 合并 runner)
+### 6.3 browser-hub(总控层 · v3.1 合并 runner · v3.2 改 Just)
 
-**职责**:rbscript 工作流执行 + 上下文共享 + 子 skill 编排
+**职责**:工作流执行(调 Just)+ 上下文共享 + 子 skill 编排
 
 **CLI 入口**:`browser-hub <action>`
 
 **核心 action**:
-- `run <file.rbs>` - 执行 rbscript 工作流
-- `validate <file.rbs>` - 用 schema 校验(不执行)
+- `run <name>` - 执行 Just 工作流(调 `justfile` recipe)
+- `validate <name>` - 校验 justfile / 配置(不执行)
 - `template <name>` - 生成模板(weibo-login / bilibili-up / 等)
 - `schedule` - 计划任务(cron 形式)
 - `list` - 列出已注册工作流
 - `state` - 显示当前 context.json
 
-**rbscript 解析器**(v3.1 关键):
+**引擎适配**(v3.2 变更 · rbscript 作废):
+- MVP = Just(`justfile` recipe)
 - 完整语法见 §7
-- 5 个内置模板见 `references/examples/*.rbs`
+- 5 个内置模板见 `references/examples/*.just`
 
 **错误码**:H001-H008(DAG 不闭合 / 期望失败 / 重试超限 / 等)
 
@@ -311,9 +366,9 @@
 
 ---
 
-### 6.5 browser-recorder(轨迹录制)
+### 6.5 browser-recorder(轨迹录制 · v3.2 改 Just)
 
-**职责**:录制真实人类操作轨迹 · 回放 · **convert-to-rbscript**(锡哥意外收获)
+**职责**:录制真实人类操作轨迹 · 回放 · **convert-to-just**(锡哥意外收获)
 
 **CLI 入口**:`browser-recorder <action>`
 
@@ -322,9 +377,9 @@
 - `stop` - 停止录制,保存到 library/
 - `replay <name>` - 回放录制
 - `library` - 列出所有录制
-- `convert-to-rbscript <name>` - **v3.1 新增**:录制转 rbscript 工作流
+- `convert-to-just <name>` - **v3.2 变更**:录制转 Just 工作流(原 convert-to-rbscript,随 rbscript 作废改)
 
-**录制格式**:library/*.json · 示例见 `references/examples/bilibili-up.rbs`(含 trace 段)
+**录制格式**:library/*.json · 示例见 `references/examples/bilibili-up.just`(含 trace 段)
 
 **错误码**:R001-R004
 
@@ -341,7 +396,7 @@
 - `detect` - 检测反爬事件(验证码 / IP 封禁 / 等)
 - `alert` - 配置告警规则(QQ Bot / webhook)
 
-**告警规则**:完整规则见 `references/examples/rbs-captcha-detected.rbs`
+**告警规则**:完整规则见 `references/examples/`(monitor 相关 .just 模板)
 
 **错误码**:M001-M004
 
@@ -380,7 +435,7 @@
 |---|---|---|---|
 | 实现语言 | Rust | Go | bash + yq |
 | GitHub stars | 🟢 35,221 | 🟡 15,948 | 0 |
-| YAML 支持 | ✅ `--yaml` 标志 | ✅ 原生 | ✅ 自定义 |
+| YAML 支持 | ⚠️ **无**(make 风格· 孙武实证)| ✅ 原生 | ✅ 自定义 |
 | 静态错误分析 | ✅ | ❌ | ⚠️ 自行 |
 | hot reload | ❌ | ✅ `-w` | ❌ |
 | 命令行参数 | ✅ 原生 | ⚠️ 有限 | ⚠️ 须包装 |
@@ -392,7 +447,7 @@
 
 ```
 BAP/
-├── justfile                # v3.2 MVP · 主入口(justfile.yaml 启用 --yaml 模式)
+├── justfile                # v3.2 MVP · 主入口(make 风格 · Just 无 YAML)
 ├── workflows/              # v3.2 MVP · 5 个 .just 模板
 │   ├── weibo-login.just
 │   ├── bilibili-up.just
@@ -408,9 +463,11 @@ BAP/
 
 | 维度 | 选择 | 理由 |
 |---|---|---|
-| **格式** | justfile(默认 · 启用 YAML 可选) | 与 Just 上游一致 · YAML 可读性高 |
-| **变量** | `set + env-var` | 锡哥 v3.0 选 YAML 诉求满足(--yaml 启用)|
+| **格式** | justfile(make 风格) | Just 官方无 YAML(孙武实证 8-10)· 与 Just 上游一致 |
+| **变量** | `set + env-var` | Just 原生语法 |
 | **依赖** | `deps: [task]` | Just 原生 DAG 调度 |
+
+> **--yaml 冲突处理(4 司会审 P0-5)**:孙武核验 Just 官方 man page(v1.57/1.58)确认**无 `--yaml` 标志**(社区把"非 YAML"当卖点)。锡哥 v3.0 YAML 诉求(ADR-003)在 Just MVP 段落空 → **MVP 用 make 风格 justfile**,YAML 诉求推迟到 P7 Taskfile 阶段(Taskfile YAML 原生)。
 | **钩子** | `pre:` / `post:` | Just 原生(相当于 rbscript 的 hooks)|
 | **错误处理** | bash wrapper (`retry` · `expect`) | 2h 包装实现原 rbscript 能力 |
 | **验证** | 无 schema(Just 静态分析替代) | 上游免费提供 |
@@ -444,25 +501,19 @@ weibo-login:
 > **v3.2 变更**:5 个模板从 .rbs → .just(Just 引擎)
 > **skill 编排更新**:v3.1 合并后 anti-detect → humanizer · extractor → operator · state-mgr 拆解为 operator + state-tool
 
----
+### 8.1-8.5 模板内容
 
-### 8.1 weibo-login.rbs(完整内容)
+> **模板完整 recipe 在 `references/examples/*.just`**(与正文分离,见 §1.3)。本节列模板的**编排骨架** + 状态说明。
 
----
+| 模板 | 当前状态 | 位置 |
+|---|---|---|
+| `weibo-login.just` | ⚠️ 空壳(6 行注释)· P2 填内容 | `references/examples/weibo-login.just` |
+| `bilibili-up.just` | ⚠️ 空壳(6 行注释)· P2 填内容 | `references/examples/bilibili-up.just` |
+| `wechat-article.just` | ⚠️ 空壳(6 行注释)· P2 填内容 | `references/examples/wechat-article.just` |
+| `slider-captcha.just` | ⚠️ 空壳(6 行注释)· P2 填内容 | `references/examples/slider-captcha.just` |
+| `batch-fetch.just` | ⚠️ 空壳(6 行注释)· P2 填内容 | `references/examples/batch-fetch.just` |
 
-### 8.2 bilibili-up.rbs(完整内容)
-
----
-
-### 8.3 wechat-article.rbs(完整内容)
-
----
-
-### 8.4 slider-captcha.rbs(完整内容)
-
----
-
-### 8.5 batch-fetch.rbs(完整内容)
+> ⚠️ **4 司会审 P0-6**:5 个 .just 模板当前为空壳,`just weibo-login` 演示依赖它们被 P2 填充。开工 P2 前必须填内容。
 
 ---
 
@@ -509,18 +560,22 @@ P1(骨架) ━━━━━━━━━━━━━━━━━━━━ 所有�
 | **范围** | P1-P5(22.1 h · 164 K) |
 | **交付** | 项目骨架 + Just + connector + operator + hub |
 | **不含** | humanizer / recorder / monitor / state-tool / Taskfile / 完整测试 |
-| **可演示** | `just weibo-login` 能跑通基本流程 |
+| **可演示** | `just smoke` 冒烟测试(connector 接入 + operator 操作)· 完整 weibo-login 待 P6 humanizer 后 |
 | **会话分段** | 1 个会话装下 |
 
-#### 路径 Y · v1.0 完整
+> **F1 修正(4 司会审 P0-4)**:路径 X 不含 humanizer/monitor,但 §8 weibo-login 编排需 5 模块 → 原承诺"`just weibo-login` 跑通"不可达(建成即失信)。**降级演示**:路径 X 演示 = `just smoke`(connector+operator 冒烟),完整 weibo-login 待 P6 补 humanizer 后。
+
+#### 路径 Y · v1.0 完整(修正后 · 不含 P7 Taskfile)
 
 | 维度 | 内容 |
 |---|---|
-| **范围** | P1-P10(35.6 h · 266 K) |
+| **范围** | P1-P6+P8-P10(31.6 h · 237 K)| 
 | **交付** | 6 skill 全部 + 完整测试 + 文档 |
-| **不含** | Taskfile(v3.3 后)+ state-tool(小工具,可补)|
-| **可演示** | 5 个 .just 模板全部跑通 |
+| **不含** | Taskfile(P7·v3.3 后)+ state-tool(小工具,可补)|
+| **可演示** | 5 个 .just 模板全部跑通(需先填模板)|
 | **会话分段** | 拆 2 段(上下文超 500K 临界)|
+
+> **修正(4 司会审 P0-1)**:原写 35.6h/266K 多算了 P7(4h/29K)。实际 = P1-P6(22.1h/164K)+ P8-P10(5h/35K) = **31.6h/237K**。
 
 #### 路径 Z · v1.1 双引擎完整
 
@@ -531,13 +586,17 @@ P1(骨架) ━━━━━━━━━━━━━━━━━━━━ 所有�
 | **可演示** | 完整 BAP |
 | **会话分段** | 拆 3 段(临界线) |
 
+> **修正(4 司会审 P0-1)**:路径 Z 范围 = P1-P12 全含 = **45.6h/351K**(原 §13.1 曾把 P7 重复计入)。
+
 ### 9.4 会话分段策略(P44 实战 · 避免 context 爆掉)
 
 | 段 | 阶段 | Token | 累计 |
 |---|---|---|---|
-| **会话 1** | P1-P6 | 184 K | 184 K |
-| **会话 2** | P7-P10 | 80 K | 264 K |
-| **会话 3** | P11-P12 | 85 K | 349 K |
+| **会话 1** | P1-P6 | 202 K | 202 K |
+| **会话 2** | P7-P10 | 64 K | 266 K |
+| **会话 3** | P11-P12 | 85 K | 351 K |
+
+> **修正(4 司会审 P0-1)**:原会话 1 写 184K(实为 P2-P6)· 实际 P1-P6 = 18+29+27+58+32+38 = **202K**;会话 2 = P7-P10 = 29+15+15+5 = **64K**。累计 = 351K(与总账一致)。
 
 **临界警示**:单会话 > 500 K 强制开新会话 · 锡哥 MINI 限额自行控制。
 
@@ -575,7 +634,7 @@ P1(骨架) ━━━━━━━━━━━━━━━━━━━━ 所有�
 | 2 | 项目位置 | `~/projects/browser-automation-platform/` | 2A |
 | 3 | 总控 skill 名 | **browser-hub** | 3D("记不住 orchestrator")|
 | 4 | 上下文共享 | 全局 JSON 文件 `~/.bap/context/current.json` | 4A |
-| 5 | 工作流格式 | rbscript(YAML 自定义)| 5A |
+| 5 | 工作流格式 | justfile(make 风格)| 5A |
 | 6 | 子 skill 调用 | CLI 调用 + 环境变量 | 6A |
 | 7 | humanizer 独立 | 是(独立 skill)| 7A |
 | 8 | 版本号 | 项目 v3.0 + 子 skill v1.0.0 | 8A |
@@ -590,7 +649,7 @@ P1(骨架) ━━━━━━━━━━━━━━━━━━━━ 所有�
 |---|---|---|
 | **1** | hub vs Selenium Hub 撞名 | §1.3 专门说明 + ADR-002 记录 |
 | **2** | v3.0 9 个 skill 太多 | v3.1 缩为 6 个(锡哥 8-10 17:31 拍板) |
-| **3** | rbscript 解析复杂度 | 用 yq 解析 YAML(成熟工具);schema 校验 |
+| **3** | ~~rbscript 解析复杂度~~(v3.2 作废)| 改为 Just 静态分析(上游免费)|
 | **4** | context.json 文件冲突 | 加锁机制(`/tmp/bap-context.lock`)|
 | **5** | 大圣 60 秒启动 | connector warmup 子命令 + browser warmup 默认 hook |
 | **6** | CLI 调子 skill 慢(每次启动 Python)| 用 `python -m xxx` 模块复用,或缓存解释器 |
@@ -625,7 +684,7 @@ P1(骨架) ━━━━━━━━━━━━━━━━━━━━ 所有�
 4. AI 也能轻松识别(hub = 中心节点,业内通用)
 
 ### ADR-003 为什么 YAML 全栈
-**决策**:browsers.yaml + rbscript.yml + schema 全 YAML
+**决策**:browsers.yaml 全 YAML(注:原含 rbscript.yml 已随 rbscript 作废)
 **原因**:
 1. 锡哥 v3.0 已选 YAML 路线
 2. AI 友好(LLM 训练数据中 YAML 比 DSL 多)
@@ -698,9 +757,9 @@ P1(骨架) ━━━━━━━━━━━━━━━━━━━━ 所有�
 | P5(hub)| 32 K | 4 h |
 | **总计** | **164 K** | **22.1 h** |
 
-**能力**:项目骨架 + Just + 3 skill · `just weibo-login` 可跑通
+**能力**:项目骨架 + Just + 3 skill · `just smoke` 冒烟可跑通(完整 weibo-login 待 P6 · 见 §9.3 F1 修正)
 
-#### 路径 Y · v1.0 完整
+#### 路径 Y · v1.0 完整(修正后 · 不含 P7)
 
 | 阶段 | Token 预测 | 工时 |
 |---|---|---|
@@ -709,18 +768,23 @@ P1(骨架) ━━━━━━━━━━━━━━━━━━━━ 所有�
 | P8(测试)| 15 K | 2 h |
 | P9(文档)| 15 K | 2 h |
 | P10(发布)| 5 K | 1 h |
-| **总计** | **266 K** | **35.6 h** |
+| **总计** | **237 K** | **31.6 h** |
 
-**能力**:6 skill 全部 + 测试 + 文档 + 发布
+> **修正(4 司会审 P0-1)**:原写 266K/35.6h 多算 P7(29K/4h)。路径 Y 不含 Taskfile → 实际 **237K/31.6h**。
+
+**能力**:6 skill 全部 + 测试 + 文档 + 发布(不含 Taskfile)
 
 #### 路径 Z · v1.1 双引擎
 
 | 阶段 | Token 预测 | 工时 |
 |---|---|---|
-| P1-P10 | 266 K | 35.6 h |
+| P1-P6 | 202 K | 26.6 h |
 | P7(Taskfile + state-tool)| 29 K | 4 h |
+| P8-P10(测试+文档+发布)| 35 K | 5 h |
 | P11-P12(边角 + 缓冲)| 85 K | 10 h |
 | **总计** | **351 K** | **45.6 h** |
+
+> **修正(4 司会审 P0-1)**:原把 P7 重复计入(P1-P10 已含 P7)。路径 Z = P1-P12 全含 = **351K/45.6h**(与 §9.1 总账一致)。
 
 **能力**:双引擎 + 6 skill + state-tool + 边角 + 缓冲
 
