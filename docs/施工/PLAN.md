@@ -9,7 +9,7 @@
 
 | P | 内容 | 工时 | Token | 依赖 | 里程碑 | 状态 |
 |---|---|---|---|---|---|---|
-| **P1** | 项目骨架 + monorepo + install.sh（软链接 dry-run）| 3.1h | 18K | 无 | 8 目录 + just + justfile + 5 模板骨架 | ⏳ 待开工 |
+| **P1** | 项目骨架 + monorepo + install.sh（软链接 dry-run）| 3.1h | 18K | 无 | 8 目录 + just + justfile + 5 模板骨架 | ✅ **完成 19:40** |
 | **P2** | Just 引擎集成 + 5 个 .just 模板实际编排 + wrapper | 4.5h | 29K | P1 | `just --list` 全 recipe | ⏳ |
 | **P3** | connector（5 action）| 3.5h | 27K | P1 | 接入完成 | ⏳ |
 | **P4** | operator（33 action · 拆 4 子任务）| 7h | 58K | P3 | 操作 MVP | ⏳ |

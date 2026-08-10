@@ -10,19 +10,24 @@
 | 阶段 | 内容 | 状态 | 备注 |
 |---|---|---|---|
 | **P0 准备** | 三司会审 4 司通过 + 方案修复 | ✅ 完成 | commit `0ea3ceb` |
-| **P0.5 施工文档** | 建 docs/施工/ 文档集 | ✅ 完成 | 本目录 |
-| **P1 骨架** | 8 目录 + just 安装 + justfile + 5 模板 + install.sh | ⏳ 待开工 | 锡哥未下开工指令 |
+| **P0.5 施工文档** | 建 docs/施工/ 文档集 + 8 项修复 | ✅ 完成 | commit `c275e9a` + `78bb845` |
+| **P1 骨架** | 8 目录 + just 安装 + justfile + 5 模板 + install.sh | ✅ **完成** | 锡哥 19:40 开工 · 5 任务全过 |
 | P2-P5 | connector/operator/hub + Just 集成 | ⏳ 待命 | |
 
 ---
 
 ## 施工日志
 
-### 2026-08-10 19:18 · P0.5 施工文档创建
+### 2026-08-10 19:40 · P1 开工（锡哥「开工」）
 
-- ✅ 创建 `docs/施工/` 下 6 文档（README/TASK/PROGRESS/BLOCKED/PLAN/验收清单）
-- ✅ 依据 task-brief 六节规范
-- ⏳ **待锡哥开工指令**（铁律 L：决策拍板 ≠ 执行拍板）
+**任务 1-5 全部完成（证据见验收清单）**：
+- ✅ 任务 1：8 缺失目录建成（workflows/engines/hub/operator/humanizer/recorder/monitor/state-tool）
+- ✅ 任务 2：just 1.58.0 装到 /home/node/tools/bin/（sha256 3ad66571… 已记）· `just --version` = 1.58.0
+- ✅ 任务 3：justfile 入口（make 风格 + import 5 模板）· `just --list` 显示 7 recipe · `just smoke` 可跑
+- ✅ 任务 4：5 模板填骨架（21-27 行 · 变量唯一前缀避冲突）· import 后 --list 无报错
+- ✅ 任务 5：install.sh（dry-run 通过 · 未真软链，符合界限）
+
+> ⚠️ 任务 4 发现并修复：5 模板 import 后变量名冲突（url/input 多文件重复）→ 改唯一前缀（wechat_url/slider_url/batch_input）
 
 ### 2026-08-10 19:17 · 工具准备（未施工）
 
