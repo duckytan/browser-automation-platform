@@ -1,0 +1,143 @@
+#!/bin/bash
+# install.sh - BAP 项目级安装脚本
+# 用法: bash install.sh [--uninstall] [--dry-run]
+
+set -e
+
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+SKILLS_DIR="$HOME/.agents/skills"
+BAP_HOME="$HOME/.bap"
+
+# === 子 skill 清单 ===
+SUBSKILLS=(
+  "browser-hub:hub"
+  "browser-connector:connector"
+  "browser-operator:operator"
+  "browser-runner:runner"
+  "browser-humanizer:humanizer"
+  "browser-anti-detect:anti-detect"
+  "browser-recorder:recorder"
+  "browser-extractor:extractor"
+  "browser-state-mgr:state-manager"
+  "browser-monitor:monitor"
+)
+
+# === 安装 ===
+install() {
+  echo "🛠 BAP 项目安装"
+  echo "项目根: $PROJECT_ROOT"
+  echo "skills 目录: $SKILLS_DIR"
+  echo ""
+  
+  # 1. 创建 skills 目录
+  mkdir -p "$SKILLS_DIR"
+  
+  # 2. 创建 ~/.bap/ 上下文目录
+  mkdir -p "$BAP_HOME/context"
+  mkdir -p "$BAP_HOME/states"
+  mkdir -p "$BAP_HOME/logs"
+  
+  # 3. 软链接子 skill
+  echo "📁 软链接子 skill → $SKILLS_DIR"
+  for entry in "${SUBSKILLS[@]}"; do
+    IFS=':' read -r name dir <<< "$entry"
+    
+    if [ ! -d "$PROJECT_ROOT/$dir" ]; then
+      echo "  ⚠️ 跳过 $name (目录 $dir 不存在)"
+      continue
+    fi
+    
+    target="$SKILLS_DIR/$name"
+    if [ -L "$target" ] || [ -e "$target" ]; then
+      echo "  🔄 移除旧链接 $name"
+      rm -rf "$target"
+    fi
+    
+    ln -sf "$PROJECT_ROOT/$dir" "$target"
+    echo "  ✅ $name → $target"
+  done
+  
+  # 4. 创建 bap CLI 快捷方式
+  echo ""
+  echo "🔧 创建 bap 快捷方式"
+  cat > "$PROJECT_ROOT/bin/bap" <<'EOF'
+#!/bin/bash
+exec browser-hub "$@"
+EOF
+  chmod +x "$PROJECT_ROOT/bin/bap"
+  
+  if [ -w /usr/local/bin ]; then
+    ln -sf "$PROJECT_ROOT/bin/bap" /usr/local/bin/bap
+    echo "  ✅ bap → /usr/local/bin/bap"
+  else
+    echo "  ⚠️ 需要 sudo 创建 /usr/local/bin/bap 软链接"
+  fi
+  
+  # 5. 验证安装
+  echo ""
+  echo "✔️ 验证安装"
+  for entry in "${SUBSKILLS[@]}"; do
+    IFS=':' read -r name dir <<< "$entry"
+    if [ -L "$SKILLS_DIR/$name" ]; then
+      echo "  ✅ $name"
+    else
+      echo "  ❌ $name (软链接丢失)"
+    fi
+  done
+  
+  echo ""
+  echo "🎉 BAP 安装完成！"
+  echo "使用："
+  echo "  browser-hub list                  # 列出子 skill"
+  echo "  browser-hub run <workflow.rbs>    # 执行工作流"
+  echo "  browser-hub list-workflows        # 列出内置模板"
+}
+
+# === 卸载 ===
+uninstall() {
+  echo "🗑 BAP 项目卸载"
+  
+  for entry in "${SUBSKILLS[@]}"; do
+    IFS=':' read -r name dir <<< "$entry"
+    target="$SKILLS_DIR/$name"
+    
+    if [ -L "$target" ]; then
+      if [ "$(readlink "$target")" = "$PROJECT_ROOT/$dir" ]; then
+        rm -f "$target"
+        echo "  ✅ 删除软链接 $name"
+      else
+        echo "  ⚠️ $name 不是 BAP 软链接，跳过"
+      fi
+    fi
+  done
+  
+  if [ -L /usr/local/bin/bap ]; then
+    rm -f /usr/local/bin/bap
+    echo "  ✅ 删除 /usr/local/bin/bap"
+  fi
+  
+  echo ""
+  echo "✔️ BAP 卸载完成（~/.bap/ 保留，你手动删 rm -rf ~/.bap）"
+}
+
+# === 入口 ===
+case "${1:-install}" in
+  install) install ;;
+  uninstall) uninstall ;;
+  --uninstall) uninstall ;;
+  --dry-run)
+    echo "🔍 干运行模式（不实际安装）"
+    echo "将安装 ${#SUBSKILLS[@]} 个子 skill"
+    echo ""
+    install
+    uninstall  # 不真装，安装完马上卸载
+    ;;
+  *)
+    echo "用法: $0 [install|uninstall|--dry-run]"
+    exit 1
+    ;;
+esac
+cd ~/projects/browser-automation-platform
+bash install.sh                  # 安装
+bash install.sh --dry-run        # 预演（不实际安装）
+bash install.sh --uninstall      # 卸载

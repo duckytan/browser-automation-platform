@@ -1,0 +1,97 @@
+# hub/workflows/bilibili-up.rbs
+# B 站 UP 主主页数据提取
+# 注：__VAR_X__ 由 browser-runner 解析时替换为实际值
+# hub/workflows/bilibili-up.rbs
+# B 站 UP 主主页数据提取
+name: bilibili-up
+version: "1.0"
+description: 提取 B 站 UP 主主页数据（粉丝 / 播放 / 简介）
+author: Ducky Tan
+tags: [extract, bilibili, kOL-data]
+
+defaults:
+  browser: xiaobai
+  profile: human-scripted
+  timeout: 60
+  output_dir: "./data/bilibili"
+
+vars:
+  up_mid: __VAR_ENV.BILIBILI_UP_MID__      # UP 主 ID
+  output_format: json                 # json | md | csv
+
+hooks:
+  before_each:
+    - skill: browser-humanizer
+      action: delay
+      args: {min: 200, max: 800}
+
+steps:
+  - id: connect
+    skill: browser-connector
+    action: connect
+    args: {browser: __VAR_defaults.browser__, session_reuse: true}
+
+  - id: nav_up_home
+    skill: browser-operator
+    action: nav
+    args: {url: "https://space.bilibili.com/__VAR_vars.up_mid__/"}
+    after: connect
+    expect: {url_contains: "space.bilibili.com"}
+
+  - id: check_login_required
+    skill: browser-monitor
+    action: detect
+    args: {types: [login-required]}
+    after: nav_up_home
+
+  - id: wait_loaded
+    skill: browser-operator
+    action: wait
+    args: {selector: ".b-info .name, .up-name", timeout: 15}
+    after: check_login_required
+
+  - id: extract_data
+    skill: browser-extractor
+    action: extract
+    args:
+      template: bilibili-up
+      url: "https://space.bilibili.com/__VAR_vars.up_mid__/"
+      output: "__VAR_vars.output_dir__/up-__VAR_vars.up_mid__.__VAR_vars.output_format__"
+      format: __VAR_vars.output_format__
+    after: wait_loaded
+
+  - id: extract_recent_videos
+    skill: browser-extractor
+    action: extract
+    args:
+      template: bilibili-recent-videos
+      url: "https://space.bilibili.com/__VAR_vars.up_mid__/"
+      output: "__VAR_vars.output_dir__/up-__VAR_vars.up_mid__-videos.json"
+    after: extract_data
+
+  - id: summary
+    skill: browser-operator
+    action: eval
+    args:
+      expr: |
+        ({
+          name: document.querySelector('.b-info .name, .up-name')?.innerText,
+          mid: window.location.pathname.match(/(\d+)/)?.[1],
+          fans: document.querySelector('#n-fans')?.innerText,
+          following: document.querySelector('#n-following')?.innerText,
+          likes: document.querySelector('#n-like')?.innerText,
+          plays: document.querySelector('#n-playnum')?.innerText,
+          intro: document.querySelector('.desc-info, .up-description')?.innerText,
+          verified: document.querySelector('.i-fa-crown, .official-icon') ? true : false
+        })
+    after: extract_recent_videos
+
+  - id: save_summary
+    skill: browser-operator
+    action: storage
+    args: {local: true, key: "bilibili-up-__VAR_vars.up_mid__", value: <summary>}
+    after: summary
+
+# === 使用方式 ===
+# browser-hub run bilibili-up.rbs --vars BILIBILI_UP_MID=123456
+# 输出：./data/bilibili/up-123456.json + up-123456-videos.json

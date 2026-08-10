@@ -1,0 +1,197 @@
+# hub/workflows/weibo-login.rbs
+# 微博自动登录 + 验证码处理 + 保存 cookie
+# 注：__VAR_X__ 由 browser-runner 解析时替换为实际值
+# hub/workflows/weibo-login.rbs
+# 微博自动登录 + 验证码处理 + 保存 cookie
+name: weibo-login
+version: "1.0"
+description: 微博自动登录，启用 stealth 防检测，带人类化操作，验证码检测后告警 + 人工介入
+author: Ducky Tan
+tags: [login, weibo, social, captcha-handling]
+
+# === 默认配置 ===
+defaults:
+  browser: dasheng
+  profile: human-casual
+  timeout: 30
+  output_dir: "./logs/weibo-login"
+
+# === 变量声明 ===
+vars:
+  username: __VAR_ENV.WEIBO_USER__
+  password: __VAR_ENV.WEIBO_PASS__
+  max_retry: 3
+  captcha_human_timeout_sec: 120
+  output_format: md
+
+# === 钩子（全局） ===
+hooks:
+  before_each:
+    - skill: browser-humanizer
+      action: delay
+      args: {min: 500, max: 1500}
+  on_fail:
+    - skill: browser-humanizer
+      action: pause
+      args: {min: 1, max: 3}
+    - skill: browser-monitor
+      action: detect
+      args: {types: [captcha, ip-banned]}
+  on_done:
+    - skill: browser-state-mgr
+      action: cookies-export
+      args: {browser: __VAR_defaults.browser__, domain: "weibo.com", output: "./states/weibo.json"}
+
+# === 步骤 ===
+steps:
+  - id: warmup_browser
+    skill: browser-connector
+    action: warmup
+    args: {browser: __VAR_defaults.browser__, wait_until_ready: true}
+    on_fail: halt
+
+  - id: enable_stealth
+    skill: browser-anti-detect
+    action: stealth
+    args: {browser: __VAR_defaults.browser__, profile: "windows-chrome"}
+    after: warmup_browser
+
+  - id: detect_initial_stealth
+    skill: browser-anti-detect
+    action: check
+    args: {browser: __VAR_defaults.browser__, url: "https://bot.sannysoft.com"}
+    after: enable_stealth
+    expect:
+      not_contains_text: ["webdriver", "automation"]
+    on_fail:
+      - skill: browser-anti-detect
+        action: inject
+        args: {browser: __VAR_defaults.browser__, plugins: [webdriver-hide, canvas-noise]}
+      - retry: detect_initial_stealth
+        max: 2
+
+  - id: nav_login
+    skill: browser-operator
+    action: nav
+    args: {url: "https://weibo.com/login"}
+    after: detect_initial_stealth
+    expect: {url_contains: "weibo.com/login"}
+    retry: {max: 2, backoff: exponential}
+
+  - id: think_pause
+    skill: browser-humanizer
+    action: pause
+    args: {min: 1.5, max: 3.0}
+    after: nav_login
+
+  - id: type_username
+    skill: browser-operator
+    action: click
+    args: {selector: "input[name=username]"}
+    after: think_pause
+    hooks:
+      before:
+        - skill: browser-humanizer
+          action: move-to
+          args: {selector: "input[name=username]", jitter: 5, duration: variable}
+
+  - id: type_username_text
+    skill: browser-humanizer
+    action: type
+    args:
+      selector: "input[name=username]"
+      text: __VAR_vars.username__
+      typo_rate: 0.03
+      typo_backspace: true
+      delay_per_char: variable
+    after: type_username
+
+  - id: think_pause_2
+    skill: browser-humanizer
+    action: pause
+    args: {min: 0.5, max: 1.5}
+    after: type_username_text
+
+  - id: type_password
+    skill: browser-humanizer
+    action: type
+    args:
+      selector: "input[name=password]"
+      text: __VAR_vars.password__
+      typo_rate: 0.02
+      delay_per_char: variable
+    after: think_pause_2
+
+  - id: think_pause_3
+    skill: browser-humanizer
+    action: pause
+    args: {min: 0.8, max: 2.0}
+    after: type_password
+
+  - id: click_login
+    skill: browser-operator
+    action: click
+    args: {selector: ".login-btn, [type=submit]"}
+    after: think_pause_3
+    expect:
+      url_contains: ["weibo.com/u/", "weibo.com/home"]
+      or:
+        dom_exists: ".geetest_holder, #nc_1_wrapper, .hcapcha-widget"
+    on_fail:
+      - skill: browser-monitor
+        action: detect
+        args: {types: [captcha, flow-abnormal]}
+      - skill: browser-humanizer
+        action: pause
+        args: {min: 2, max: 4}
+      - retry: click_login
+        max: __VAR_vars.max_retry__
+
+  - id: handle_captcha_if_present
+    skill: browser-monitor
+    action: detect
+    args: {types: [captcha]}
+    after: click_login
+    branches:
+      - when: {detected: captcha}
+        then:
+          - skill: browser-monitor
+            action: alert
+            args:
+              rule: captcha-detected
+              channel: qqbot
+              target: __VAR_ENV.TARGET_OPENID__
+              message: "🚨 微博登录遇到验证码，请人工介入（120 秒超时）"
+          - skill: browser-humanizer
+            action: pause
+            args: {min: 5, max: __VAR_vars.captcha_human_timeout_sec__}
+            description: 等待人工介入
+          - skill: browser-operator
+            action: wait
+            args: {selector: ".user-name, .gn_name, [href*='/u/']", timeout: __VAR_vars.captcha_human_timeout_sec__}
+
+  - id: verify_login
+    skill: browser-operator
+    action: eval
+    args: {expr: "document.querySelector('.user-name, .gn_name')?.innerText"}
+    after: handle_captcha_if_present
+    expect:
+      not_empty: true
+    on_fail:
+      - skill: browser-monitor
+        action: alert
+        args:
+          rule: login-failed
+          message: "❌ 微博登录失败，请检查"
+      - fail: "登录失败，未找到用户名"
+
+# === 手动使用方式 ===
+# browser-hub run weibo-login.rbs \
+#   --vars WEIBO_USER=xxx --vars WEIBO_PASS=yyy \
+#   --vars TARGET_OPENID=8A3F643D...
+#
+# 或 .env 文件：
+# WEIBO_USER=xxx
+# WEIBO_PASS=yyy
+# TARGET_OPENID=8A3F643D...
+# browser-hub run weibo-login.rbs --vars-from=.env

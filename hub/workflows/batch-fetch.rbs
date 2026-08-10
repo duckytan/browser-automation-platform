@@ -1,0 +1,90 @@
+# hub/workflows/batch-fetch.rbs
+# 批量 URL 抓取
+# 注：__VAR_X__ 由 browser-runner 解析时替换为实际值
+# hub/workflows/batch-fetch.rbs
+# 批量 URL 抓取（并发控制）
+name: batch-fetch
+version: "1.0"
+description: 批量 URL 抓取为 Markdown，并发控制
+author: Ducky Tan
+tags: [batch, extract, parallel]
+
+defaults:
+  browser: xiaobai
+  profile: human-scripted
+  timeout: 600
+  concurrency: 3                       # 并发浏览器数
+  output_dir: "./data/batch"
+
+vars:
+  urls_file: __VAR_ENV.URLS_FILE__
+  extract_template: __VAR_ENV.EXTRACT_TEMPLATE__
+  output_format: md
+
+hooks:
+  before_each:
+    - skill: browser-humanizer
+      action: delay
+      args: {min: 200, max: 600}
+
+steps:
+  - id: load_urls
+    skill: browser-runner
+    action: load-file
+    args:
+      file: __VAR_vars.urls_file__
+      format: json|yaml|tsv              # 支持多种格式
+      output_var: "urls"
+    on_fail:
+      - fail: "加载 URL 列表失败，检查 __VAR_vars.urls_file__"
+
+  - id: validate_urls
+    skill: browser-runner
+    action: validate
+    args:
+      urls: <urls>
+      require: ["url"]
+      max: 1000
+    after: load_urls
+
+  - id: parallel_fetch
+    skill: browser-runner
+    action: parallel
+    args:
+      concurrency: __VAR_defaults.concurrency__
+      items_var: "urls"
+      for_each:
+        id: "fetch___VAR_index__"
+        skill: browser-extractor
+        action: extract
+        args:
+          template: __VAR_vars.extract_template__
+          url: "__VAR_item.url__"
+          output: "__VAR_vars.output_dir__/$(date +%Y%m%d)/__VAR_index__-__VAR_item.title|slugify__.__VAR_vars.output_format__"
+          format: __VAR_vars.output_format__
+        on_fail:
+          - skill: browser-monitor
+            action: alert
+            args:
+              rule: batch-item-failed
+              message: "⚠️ __VAR_item.url__ 抓取失败: __VAR_error__"
+          - continue                    # 不中断批次
+
+  - id: summary
+    skill: browser-runner
+    action: aggregate
+    args:
+      results: <parallel_fetch>
+      output: "__VAR_vars.output_dir__/summary.json"
+      stats: [success_count, fail_count, total_duration_sec]
+
+# === urls_file 格式示例（urls.yaml）===
+# - url: https://example.com/article/1
+#   title: 第一篇
+# - url: https://example.com/article/2
+#   title: 第二篇
+
+# === 使用方式 ===
+# browser-hub run batch-fetch.rbs \
+#   --vars URLS_FILE=./urls.yaml \
+#   --vars EXTRACT_TEMPLATE=wechat-article

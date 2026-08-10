@@ -1,0 +1,98 @@
+# hub/workflows/slider-captcha.rbs
+# 滑条验证码自动化处理
+# 注：__VAR_X__ 由 browser-runner 解析时替换为实际值
+# hub/workflows/slider-captcha.rbs
+# 滑条验证码自动化处理（适用于极验 / 阿里云 / hCaptcha 等）
+name: slider-captcha
+version: "1.0"
+description: 识别并拖动滑条验证码
+author: Ducky Tan
+tags: [captcha, slider, anti-bot]
+
+defaults:
+  browser: dasheng
+  profile: human-casual
+  timeout: 60
+
+vars:
+  page_url: __VAR_ENV.PAGE_URL__
+  max_retry: 5
+
+hooks:
+  before_each:
+    - skill: browser-humanizer
+      action: delay
+      args: {min: 500, max: 1500}
+
+steps:
+  - id: connect
+    skill: browser-connector
+    action: connect
+    args: {browser: __VAR_defaults.browser__}
+
+  - id: enable_stealth
+    skill: browser-anti-detect
+    action: stealth
+    args: {browser: __VAR_defaults.browser__, profile: "windows-chrome"}
+    after: connect
+
+  - id: nav_page
+    skill: browser-operator
+    action: nav
+    args: {url: __VAR_vars.page_url__}
+    after: enable_stealth
+
+  - id: detect_slider
+    skill: browser-monitor
+    action: detect
+    args: {types: [slider-captcha]}
+    after: nav_page
+    branches:
+      - when: {not_detected: slider}
+        then:
+          - fail: "页面未发现滑条验证码"
+
+  - id: drag_slider
+    skill: browser-humanizer
+    action: drag
+    args:
+      from_selector: ".geetest_holder .geetest_slider_button, #nc_1_wrapper .nc_icon, .hcapcha-slider"
+      to_selector: ".geetest_holder .geetest_slicebg, #nc_1_wrapper .nc_scale, .hcapcha-slider-end"
+      curve: bezier
+      steps: {min: 20, max: 30}
+      speed: variable
+      acceleration: natural
+      overshoot_then_back: 2
+      jitter_amplitude: 3
+    after: detect_slider
+    retry: {max: __VAR_vars.max_retry__, backoff: exponential}
+
+  - id: verify_slider
+    skill: browser-monitor
+    action: detect
+    args: {types: [captcha-solved, captcha-failed]}
+    after: drag_slider
+    on_fail:
+      - skill: browser-humanizer
+        action: pause
+        args: {min: 2, max: 5}
+      - skill: browser-anti-detect
+        action: rotate-fingerprint
+        args: {profile: macos-safari}
+      - retry: drag_slider
+        max: __VAR_vars.max_retry__
+
+  - id: continue_workflow
+    skill: browser-operator
+    action: wait
+    args: {selector: ".geetest_success, #nc_1_wrapper .nc-lang-cnt, .hcapcha-success", timeout: 10}
+    after: verify_slider
+    on_fail:
+      - skill: browser-monitor
+        action: alert
+        args:
+          rule: captcha-unsolvable
+          message: "❌ 滑条验证码无法解决，需人工介入"
+
+# === 使用方式 ===
+# browser-hub run slider-captcha.rbs --vars PAGE_URL=https://example.com/captcha-page

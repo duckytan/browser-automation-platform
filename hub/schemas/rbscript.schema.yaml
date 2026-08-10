@@ -1,0 +1,45 @@
+# rbscript.schema.yaml - JSON Schema for .rbs validation
+
+# hub/schemas/rbscript.schema.yaml
+$schema: http://json-schema.org/draft-07/schema#
+type: object
+required: [name, steps]
+properties:
+  name: {type: string}
+  version: {type: string, pattern: "^[0-9]+\\.[0-9]+$"}
+  description: {type: string}
+  defaults:
+    type: object
+    properties:
+      browser: {type: string}
+      profile: {type: string}
+      timeout: {type: integer, minimum: 1}
+  vars:
+    type: object
+    additionalProperties: {type: string}
+  hooks:
+    type: object
+    properties:
+      before_each: {type: array}
+      on_fail: {type: array}
+      on_done: {type: array}
+  steps:
+    type: array
+    items:
+      type: object
+      required: [id, skill, action]
+      properties:
+        id: {type: string}
+        skill: {type: string, enum: [browser-connector, browser-operator, browser-runner, browser-humanizer, browser-anti-detect, browser-recorder, browser-extractor, browser-state-mgr, browser-monitor]}
+        action: {type: string}
+        args: {type: object}
+        after: {type: string}
+        expect: {type: object}
+        retry:
+          type: object
+          properties:
+            max: {type: integer}
+            backoff: {type: string, enum: [linear, exponential]}
+        on_fail: {type: array}
+  branches:
+    type: array

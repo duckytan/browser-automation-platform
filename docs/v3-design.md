@@ -592,25 +592,68 @@ browser-humanizer --stealth ...                     # 全局 stealth
 
 ### 6.3 browser-runner（脚本执行层）
 
-**职责**：解析并执行 rbscript 工作流
+**职责**：解析并执行 rbscript 工作流（实际是 hub 的执行引擎，但暴露 CLI 单独调试）
 
 **目录结构**：
 ```
 runner/
 ├── SKILL.md
 ├── bin/browser-runner
-├── taskfile-templates/         # Taskfile.yml 模板
+├── lib/
+│   ├── rbscript_parser.sh     # YAML → DAG（用 yq + jq）
+│   ├── workflow_executor.sh   # 拓扑序执行
+│   ├── var_resolver.sh        # ${ENV.X} ${vars.X} 解析
+│   ├── expect_checker.sh      # 断言校验
+│   └── hook_runner.sh         # hooks 调度
+├── taskfile-templates/         # Taskfile.yml 模板（备用）
 ├── just-templates/             # justfile 模板（备用）
 └── tests/
 ```
 
-**CLI**：
+**CLI 完整接口**：
 ```bash
-browser-runner run <workflow.rbs>     # 执行 rbscript 工作流
-browser-runner validate <workflow.rbs> # 校验 rbscript 语法（用 schema）
-browser-runner template list           # 列出内置模板
-browser-runner template create <name>  # 创建新模板
+browser-runner run <workflow.rbs> [--dry-run] [--vars-from-env] [--vars-from=.env]   # 执行
+browser-runner validate <workflow.rbs> [--strict]                  # 校验（含 schema）
+browser-runner template list                                        # 列出内置模板
+browser-runner template show <name>                                 # 显示模板内容
+browser-runner template create <name> --from=<existing.rbs>         # 从现有创建新模板
+browser-runner trace <workflow.rbs>                                 # DAG 可视化
+browser-runner dry-run <workflow.rbs>                               # 模拟执行（不调子 skill）
 ```
+
+**核心算法（rbscript_parser.sh）**：
+```bash
+parse_rbscript() {
+    local file="$1"
+    
+    # 1. yq 解析 YAML → JSON
+    local json=$(yq -o=json "$file")
+    
+    # 2. jq 校验 schema（rbscript.schema.yaml）
+    echo "$json" | jsonschema validate rbscript.schema.yaml
+    
+    # 3. 构建依赖图（DAG）
+    local steps=$(echo "$json" | jq '.steps[] | {id: .id, after: .after}')
+    
+    # 4. 拓扑排序（Kahn 算法）
+    topological_sort "$steps"
+    
+    # 5. 返回执行计划
+    echo "$json" | jq '{name, vars, defaults, hooks, steps: <topo_sorted>}'
+}
+```
+
+**错误码**：
+| code | 含义 | 恢复策略 |
+|---|---|---|
+| `E001` | YAML 语法错 | 报错退出 · 不重试 |
+| `E002` | schema 校验失败 | 报错退出 + 指出哪个字段 |
+| `E003` | 循环依赖（DAG 不闭合）| 报错退出 + 路径 |
+| `E004` | step 缺 skill 或 action | 报错退出 |
+| `E005` | 期望断言失败 | 按 `on_fail` 配置处理 |
+| `E006` | 重试超过 max | 按 `on_fail` 配置处理 |
+| `E007` | 变量未定义 | 报错退出 + 指出哪个变量 |
+| `E008` | 子 skill 调用超时 | 按 retry 配置处理 |
 
 > **为什么 runner 单独 skill**：rbscript 解析 + 工作流调度是个**独立能力**，未来还能扩展 Taskfile / Just 的支持。锡哥 v3.0 决定 rbscript 是主选，所以 runner 围绕 rbscript 设计。
 
@@ -638,22 +681,98 @@ humanizer/
 └── tests/
 ```
 
+**CLI 完整接口**：
+```bash
+browser-humanizer delay --min=100 --max=500 [--unit=ms]            # 随机延迟
+browser-humanizer pause --min=2 --max=8 [--unit=sec]              # 思考停顿
+browser-humanizer move-to --selector=.btn [--jitter=5] [--duration=variable]  # 移动+抖动
+browser-humanizer move-along --trajectory=points.json [--speed=variable]    # 沿路径移动
+browser-humanizer drag --from=.slider --to=.end \
+    [--curve=bezier] [--steps=25] [--speed=variable] \
+    [--acceleration=natural] [--overshoot-then-back=2] [--jitter-amplitude=3]  # 滑条拖动
+browser-humanizer type --selector=input --text=hello \
+    [--typo-rate=0.05] [--typo-backspace=true] [--delay-per-char=variable]   # 带打错输入
+browser-humanizer scroll --direction=down \
+    [--curve=natural] [--bottom-pause=1.5] [--step-px=variable]              # 自然滚动
+browser-humanizer record-trajectory start --name=weibo-login --browser=dasheng  # 录制轨迹
+browser-humanizer record-trajectory stop --name=weibo-login                  # 停止录制
+browser-humanizer replay-trajectory --name=weibo-login [--speed=1.0]          # 回放轨迹
+browser-humanizer profile set --name=human-casual                            # 切换行为画像
+browser-humanizer profile show                                              # 查看当前画像
+browser-humanizer profile list                                              # 列出所有画像
+```
+
 **行为画像示例**：
 ```yaml
 # behaviors/human-casual.yaml
 profile_name: human-casual
+description: 普通用户的自然行为模式
+
+# 点击
 click_delay_ms: {min: 100, max: 400}
+click_pre_move_jitter_px: {min: 1, max: 5}
+
+# 输入
 type_delay_per_char_ms: {min: 80, max: 250}
 type_typo_rate: 0.03
 type_typo_backspace: true
+type_think_pause_at_punctuation_sec: {min: 0.3, max: 1.2}
+
+# 思考停顿
 think_pause_sec: {min: 0.5, max: 3.0}
-scroll_curve: natural
+think_pause_probability: 0.15
+
+# 滚动
+scroll_curve: natural              # natural | linear | ease-in-out
 scroll_step_px: {min: 100, max: 400}
+scroll_pause_at_bottom_sec: {min: 0.8, max: 2.5}
+
+# 鼠标
 mouse_jitter_px: {min: 1, max: 8}
-drag_curve: bezier
+mouse_acceleration: natural        # natural | linear
+
+# 拖动（滑条专杀）
+drag_curve: bezier                 # bezier | linear | catmull
 drag_steps: {min: 15, max: 35}
-drag_overshoot_px: 2
+drag_speed_px_per_sec: {min: 400, max: 1200}
+drag_overshoot_px: 2              # 拖过头 + 回退（人类常见）
 ```
+
+**drag 算法详解**（滑条验证码专杀）：
+```python
+# trajectories/bezier.py
+def drag_with_overshoot(start, end, steps=25, overshoot_px=2, jitter_amp=3):
+    # 1. 计算起点 → 终点（超过终点 overshoot_px）
+    overshoot_end = (end[0] + overshoot_px, end[1])
+    
+    # 2. 用三次贝塞尔曲线生成控制点（模拟人类加速/减速）
+    control1 = (start[0] + (end[0]-start[0])*0.25, start[1])
+    control2 = (start[0] + (end[0]-start[0])*0.75, end[1])
+    points = bezier_curve(start, control1, control2, overshoot_end, steps)
+    
+    # 3. 加 ±jitter_amp 像素随机抖动
+    points = [(p[0] + random.uniform(-jitter_amp, jitter_amp),
+               p[1] + random.uniform(-jitter_amp, jitter_amp)) for p in points]
+    
+    # 4. 模拟人类加速 → 减速（开始慢、中间快、结束慢）
+    speeds = [ease_in_out(i, 0, 1, steps) for i in range(steps)]
+    delays = [1.0 / speed / 1000 for speed in speeds]  # ms
+    
+    # 5. 接近终点时略超出 + 回退（最后 5 个点回退 overshoot_px）
+    for i in range(steps-5, steps):
+        backoff = (steps - i) * overshoot_px / 5
+        points[i] = (end[0] - backoff + random.uniform(-1, 1), end[1])
+    
+    return points, delays
+```
+
+**错误码**：
+| code | 含义 |
+|---|---|
+| `H001` | 行为画像不存在 |
+| `H002` | selector 找不到元素 |
+| `H003` | 浏览器 session 丢失 |
+| `H004` | 拖动起点/终点不在同一 viewport |
 
 ---
 
@@ -669,26 +788,115 @@ anti-detect/
 ├── fingerprints/               # 浏览器指纹模板
 │   ├── windows-chrome.yaml
 │   ├── macos-safari.yaml
-│   └── mobile-iphone.yaml
-├── plugins/                    # 反检测插件
-│   ├── webdriver-hide.js
-│   ├── canvas-noise.js
-│   └── audio-noise.js
+│   ├── mobile-iphone.yaml
+│   └── linux-chromium.yaml
+├── plugins/                    # 反检测 JS 插件
+│   ├── webdriver-hide.js       # 隐藏 navigator.webdriver
+│   ├── canvas-noise.js         # canvas 指纹加噪声
+│   ├── audio-noise.js          # audio 指纹加噪声
+│   ├── webgl-vendor.js         # WebGL vendor 模拟
+│   └── timezone-spoof.js       # 时区与语言伪装
 └── tests/
 ```
 
-**核心能力**：
+**CLI 完整接口**：
 ```bash
-browser-anti-detect stealth --browser=dasheng      # 启用 stealth 模式
-browser-anti-detect rotate-fingerprint             # 随机化 fingerprint
-browser-anti-detect check --url=https://bot.sannysoft.com  # 检测当前是否被识别
+browser-anti-detect stealth --browser=dasheng --profile=windows-chrome       # 启用 stealth
+browser-anti-detect rotate-fingerprint [--profile=macos-safari] [--seed=random]  # 随机化指纹
+browser-anti-detect check [--url=https://bot.sannysoft.com] [--browser=dasheng]  # 检测当前是否被识别
+browser-anti-detect inject --browser=dasheng \
+    --plugins=webdriver-hide,canvas-noise,audio-noise                                # 注入反检测插件
+browser-anti-detect profile list                                                     # 列出指纹模板
+browser-anti-detect profile show <name>                                              # 查看指纹详情
 ```
+
+**指纹模板示例（windows-chrome.yaml）**：
+```yaml
+profile_name: windows-chrome
+description: "Windows 10 + Chrome 125 浏览器指纹"
+
+# User-Agent
+user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+
+# 屏幕
+screen: {width: 1920, height: 1080, availWidth: 1920, availHeight: 1040}
+viewport: {width: 1920, height: 969}
+device_pixel_ratio: 1
+
+# 时区 / 语言
+timezone: "Asia/Shanghai"
+timezone_offset: -480
+language: "zh-CN"
+languages: ["zh-CN", "zh", "en-US", "en"]
+
+# 硬件并发
+hardware_concurrency: 8
+device_memory: 8
+
+# WebGL
+webgl_vendor: "Google Inc. (Intel)"
+webgl_renderer: "ANGLE (Intel, Intel(R) UHD Graphics 630 (CFL GT2), OpenGL 4.5)"
+
+# Canvas / Audio 噪声
+canvas_noise_seed: "random-string-1"
+audio_noise_seed: "random-string-2"
+
+# 反检测插件（按顺序注入）
+plugins: [webdriver-hide, canvas-noise, audio-noise, webgl-vendor, timezone-spoof]
+```
+
+**反检测插件（webdriver-hide.js）**：
+```javascript
+// 删除 webdriver 标志
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+
+// 删除自动化痕迹
+delete navigator.__proto__.webdriver;
+
+// Chrome runtime 模拟
+window.chrome = {
+    runtime: {
+        onMessage: {addListener: () => {}, removeListener: () => {}},
+        sendMessage: () => {},
+        connect: () => ({onMessage: {addListener: () => {}}}),
+        PlatformArch: {get: () => 'x86-64'}
+    },
+    app: {isInstalled: false, InstallState: {DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed'}, RunningState: {CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running'}},
+    csi: () => ({startE: Date.now(), onloadT: Date.now()}),
+    loadTimes: () => ({requestTime: Date.now()/1000, startTime: Date.now()/1000})
+};
+
+// 权限 API 模拟
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) => (
+    parameters.name === 'notifications' ?
+    Promise.resolve({state: Notification.permission}) :
+    originalQuery(parameters)
+);
+
+// Plugins 长度填充（Chrome 默认 5 个）
+Object.defineProperty(navigator, 'plugins', {
+    get: () => [
+        {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format'},
+        {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: ''},
+        {name: 'Native Client', filename: 'internal-nacl-plugin', description: ''}
+    ]
+});
+```
+
+**错误码**：
+| code | 含义 |
+|---|---|
+| `AD001` | 指纹模板不存在 |
+| `AD002` | 插件注入失败（浏览器版本不兼容）|
+| `AD003` | 检测页面访问失败 |
+| `AD004` | 注入后还是被检测到（需调整指纹）|
 
 ---
 
 ### 6.6 browser-recorder（轨迹录制）
 
-**职责**：录制真实人类操作轨迹 · 回放
+**职责**：录制真实人类操作轨迹 · 回放（用于锡哥手动操作一次后，后续脚本自动重放）
 
 **目录结构**：
 ```
@@ -699,22 +907,138 @@ recorder/
 │   ├── weibo-login.json        # 锡哥手动录的微博登录
 │   ├── taobao-search.json
 │   └── README.md
+├── recorder.py                 # 录制器（注入 JS 监听事件）
 └── tests/
 ```
 
-**核心能力**：
+**CLI 完整接口**：
 ```bash
-browser-recorder record start --name=weibo-login --browser=dasheng   # 开始录制
-browser-recorder record stop --name=weibo-login                     # 停止录制（锡哥手动操作）
-browser-recorder replay --name=weibo-login --browser=dasheng        # 回放
-browser-recorder library list                                       # 列出所有录制
+browser-recorder record start --name=weibo-login --browser=dasheng \
+    [--capture=screenshot,dom,mouse,keyboard]                                    # 开始录制
+browser-recorder record stop --name=weibo-login                                   # 停止录制
+browser-recorder record pause                                                     # 暂停录制
+browser-recorder record resume                                                    # 继续录制
+browser-recorder record status                                                    # 查看录制状态
+browser-recorder replay --name=weibo-login --browser=dasheng [--speed=1.0] \
+    [--from-step=5] [--to-step=20]                                                 # 回放
+browser-recorder replay-step --name=weibo-login --step-id=5                       # 单步回放（调试）
+browser-recorder library list [--browser=dasheng]                                 # 列出所有录制
+browser-recorder library show --name=weibo-login                                  # 查看录制详情
+browser-recorder library convert --name=weibo-login --to=rbscript                # 转 rbscript（锡哥意外收获）
 ```
+
+**录制格式（library/weibo-login.json）**：
+```json
+{
+  "name": "weibo-login",
+  "version": "1.0",
+  "recorded_at": "2026-08-10T16:30:00Z",
+  "browser": "dasheng",
+  "total_duration_sec": 47.2,
+  "steps_count": 8,
+  "events": [
+    {
+      "id": "step-1",
+      "ts_offset_ms": 0,
+      "type": "nav",
+      "url": "https://weibo.com/login"
+    },
+    {
+      "id": "step-2",
+      "ts_offset_ms": 1200,
+      "type": "mouse_move",
+      "from": {"x": 950, "y": 540},
+      "to": {"x": 412, "y": 234},
+      "path": "bezier",
+      "duration_ms": 850
+    },
+    {
+      "id": "step-3",
+      "ts_offset_ms": 2050,
+      "type": "click",
+      "selector": "input[name=username]",
+      "x": 412, "y": 234
+    },
+    {
+      "id": "step-4",
+      "ts_offset_ms": 2300,
+      "type": "type",
+      "selector": "input[name=username]",
+      "text": "anonymous",
+      "delay_per_char_ms": 120
+    },
+    {
+      "id": "step-5",
+      "ts_offset_ms": 4800,
+      "type": "think_pause",
+      "duration_ms": 1100
+    },
+    {
+      "id": "step-6",
+      "ts_offset_ms": 5900,
+      "type": "mouse_move",
+      "from": {"x": 412, "y": 234},
+      "to": {"x": 412, "y": 296}
+    },
+    {
+      "id": "step-7",
+      "ts_offset_ms": 6500,
+      "type": "click",
+      "selector": "input[name=password]",
+      "x": 412, "y": 296
+    },
+    {
+      "id": "step-8",
+      "ts_offset_ms": 6800,
+      "type": "type_with_typo",
+      "selector": "input[name=password]",
+      "text": "passw0rd!",
+      "delay_per_char_ms": 150,
+      "typo_at": 7,
+      "typo_char": "1",
+      "correction_delay_ms": 280
+    }
+  ],
+  "screenshots": [
+    {"step": "step-1", "path": "library/weibo-login/step-1.png"},
+    {"step": "step-3", "path": "library/weibo-login/step-3.png"}
+  ]
+}
+```
+
+**convert-to-rbscript 能力**（锡哥意外收获）：
+```bash
+browser-recorder library convert --name=weibo-login --to=rbscript --output=./weibo-login.rbs
+
+# 输出示例（锡哥以后不需要手写 .rbs，只录一次就生成 .rbs）：
+# name: weibo-login
+# version: "1.0"
+# source: recorder library "weibo-login"
+# steps:
+#   - id: nav
+#     skill: browser-operator
+#     action: nav
+#     args: {url: "https://weibo.com/login"}
+#   - id: type_user
+#     skill: browser-operator
+#     action: type
+#     args: {selector: "input[name=username]", text: "anonymous"}
+#   ...
+```
+
+**错误码**：
+| code | 含义 |
+|---|---|
+| `R001` | 录制未启动 |
+| `R002` | 浏览器断连（录制中）|
+| `R003` | 录制库不存在 |
+| `R004` | 回放步骤超界 |
 
 ---
 
 ### 6.7 browser-extractor（数据提取）
 
-**职责**：结构化数据提取 · 模板化 · 输出标准化
+**职责**：结构化数据提取 · 模板化 · 输出标准化（Markdown / JSON / CSV）
 
 **目录结构**：
 ```
@@ -724,15 +1048,120 @@ extractor/
 ├── templates/                  # 提取模板
 │   ├── wechat-article.yaml     # 微信公众号文章提取模板
 │   ├── bilibili-up.yaml        # B 站 UP 主提取
-│   └── douyin-video.yaml       # 抖音视频提取
+│   ├── douyin-video.yaml       # 抖音视频提取
+│   └── README.md
+├── lib/
+│   ├── template_engine.py      # 模板解析 + 提取
+│   ├── output_formatter.py     # md / json / csv 转换
+│   └── xpath_css.py            # 选择器引擎
 └── tests/
 ```
 
-**核心能力**：
+**CLI 完整接口**：
 ```bash
-browser-extractor extract --template=wechat-article --url=https://mp.weixin.qq.com/s/xxx --output=article.md
-browser-extractor template create --name=my-template                # 创建新模板
+browser-extractor extract --template=wechat-article \
+    --url=https://mp.weixin.qq.com/s/xxx \
+    --output=article.md [--format=md|json|csv]                       # 单次提取
+
+browser-extractor batch --template=bilibili-up \
+    --urls-file=urls.txt \
+    --output-dir=./data/bilibili/ [--concurrency=3]                   # 批量提取
+
+browser-extractor template list                                       # 列出模板
+browser-extractor template show <name>                                # 查看模板
+browser-extractor template create --name=my-template --from-url=...   # 创建模板（交互式）
+browser-extractor template validate <name>                            # 验证模板语法
+
+browser-extractor schema extract --url=... --template=... --output=schema.json  # 自动生成 schema
 ```
+
+**模板示例（wechat-article.yaml）**：
+```yaml
+name: wechat-article
+version: "1.0"
+description: 微信公众号文章提取
+
+# 输入参数
+inputs:
+  url: {type: string, required: true}
+  output_format: {type: enum, values: [md, json, csv], default: md}
+
+# 提取字段
+fields:
+  - name: title
+    selector: "#activity-name"
+    attr: text
+    required: true
+    validate: {min_length: 5, max_length: 200}
+  
+  - name: author
+    selector: "#meta_content .js_author_name"
+    attr: text
+    required: false
+    default: "匿名"
+  
+  - name: publish_time
+    selector: "#publish_time"
+    attr: text
+    transform: "datetime_iso"        # 转 ISO 8601
+  
+  - name: content_html
+    selector: "#js_content"
+    attr: innerHTML
+    transform: "html_to_md"          # HTML → Markdown
+  
+  - name: read_count
+    selector: "#read_num"
+    attr: text
+    transform: "extract_int"         # 提取数字
+  
+  - name: images
+    selector: "#js_content img"
+    attr: data-src
+    multiple: true                    # 多值
+  
+  - name: videos
+    selector: "#js_content iframe[data-src*=mpvideo]"
+    attr: data-src
+    multiple: true
+
+# 输出格式
+output:
+  md: |
+    # {title}
+    
+    **作者**：{author}  **发布时间**：{publish_time}
+    
+    ---
+    
+    {content_html}
+    
+    ---
+    
+    **阅读量**：{read_count}  **图片数**：{len(images)}
+  
+  json:
+    title: "{title}"
+    author: "{author}"
+    publish_time: "{publish_time}"
+    read_count: {read_count}
+    images: {images}
+    videos: {videos}
+
+# 错误处理
+on_field_missing:
+  required: fail_workflow
+  optional: use_default
+```
+
+**错误码**：
+| code | 含义 |
+|---|---|
+| `EX001` | 模板不存在 |
+| `EX002` | 必需字段提取失败 |
+| `EX003` | 转换函数错误（如 datetime_iso 解析失败）|
+| `EX004` | 输出格式不支持 |
+| `EX005` | 批量任务部分失败 |
 
 ---
 
@@ -749,22 +1178,98 @@ state-manager/
 │   ├── weibo.json
 │   ├── github.json
 │   └── README.md
+├── lib/
+│   ├── cookie_io.py            # cookie 导入导出
+│   ├── state_migrator.py       # 跨浏览器状态迁移
+│   └── login_automator.py      # 自动登录调度
 └── tests/
 ```
 
-**核心能力**：
+**CLI 完整接口**：
 ```bash
-browser-state-mgr cookies export --browser=xiaobai --output=./states/weibo.json
-browser-state-mgr cookies import --browser=dasheng --input=./states/weibo.json
-browser-state-mgr login --browser=xiaobai --site=weibo --user=xxx
-browser-state-mgr state show                                       # 当前所有浏览器登录态
+# === Cookie 操作 ===
+browser-state-mgr cookies export --browser=xiaobai \
+    --output=./states/weibo.json [--domain=weibo.com]                # 导出
+browser-state-mgr cookies import --browser=dasheng \
+    --input=./states/weibo.json [--merge|replace]                     # 导入
+browser-state-mgr cookies list --browser=xiaobai                     # 列出
+browser-state-mgr cookies delete --browser=xiaobai --domain=old.com  # 删除某域
+
+# === 登录状态 ===
+browser-state-mgr login --browser=xiaobai --site=weibo \
+    --user=xxx --password-from-env=WEIBO_PASS \
+    [--two-factor=auto|skip|require]                                   # 自动登录
+browser-state-mgr logout --browser=xiaobai --site=weibo              # 退出登录
+
+# === 状态查询 ===
+browser-state-mgr state show                                         # 所有浏览器登录态
+browser-state-mgr state show --site=weibo                            # 某站状态
+browser-state-mgr state diff --browser1=xiaobai --browser2=dasheng   # 两浏览器登录态差异
+
+# === 状态迁移 ===
+browser-state-mgr migrate --from=xiaobai --to=dasheng \
+    --state=./states/weibo.json [--verify=true]                       # 跨浏览器迁移
 ```
+
+**状态文件格式（states/weibo.json）**：
+```json
+{
+  "site": "weibo.com",
+  "version": "1.0",
+  "exported_at": "2026-08-10T16:30:00Z",
+  "exported_from": "xiaobai",
+  "cookies": [
+    {
+      "name": "SUB",
+      "value": "_2A25K...",
+      "domain": ".weibo.com",
+      "path": "/",
+      "expires": 1893456000,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "SUBP",
+      "value": "0033WrSXqPxfM72WsWs9jqgMF55529P9D9WWa8M_BMqFF...",
+      "domain": ".weibo.com",
+      "path": "/",
+      "expires": 1893456000,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "local_storage": {
+    "weibo.com": {
+      "login_sid": "xxx",
+      "uid": "1234567890"
+    }
+  },
+  "session_storage": {},
+  "meta": {
+    "user_agent": "Mozilla/5.0...",
+    "browser_version": "Chrome/125.0",
+    "screen": "1920x1080"
+  }
+}
+```
+
+**错误码**：
+| code | 含义 |
+|---|---|
+| `S001` | 浏览器未连接 |
+| `S002` | Cookie 导出失败 |
+| `S003` | Cookie 导入被拒绝（域名不匹配）|
+| `S004` | 自动登录验证码无法绕过 |
+| `S005` | 两步验证需人工 |
+| `S006` | 状态文件损坏 |
 
 ---
 
 ### 6.9 browser-monitor（监控）
 
-**职责**：长跑任务监控 / 反爬检测告警 / 日志聚合
+**职责**：长跑任务监控 / 反爬检测告警 / 日志聚合 / QQ Bot 告警推送
 
 **目录结构**：
 ```
@@ -774,16 +1279,109 @@ monitor/
 ├── rules/                      # 告警规则
 │   ├── captcha-detected.yaml
 │   ├── ip-banned.yaml
-│   └── flow-abnormal.yaml
+│   ├── flow-abnormal.yaml
+│   └── login-required.yaml
+├── lib/
+│   ├── detector.py             # 检测引擎（验证码/封号/异常）
+│   ├── alerter.py              # 告警推送（QQ Bot / email）
+│   └── log_aggregator.py       # 日志聚合
 └── tests/
 ```
 
-**核心能力**：
+**CLI 完整接口**：
 ```bash
-browser-monitor watch                                          # 实时监控
-browser-monitor detect                                         # 当前检测（验证码 / IP 封禁 / 流程异常）
-browser-monitor alert --rule=captcha-detected                  # 配置告警
+# === 实时监控 ===
+browser-monitor watch [--interval=5] [--browser=dasheng]               # 实时监控
+browser-monitor watch --rbscript=weibo-login.rbs                      # 监控某个工作流
+
+# === 检测 ===
+browser-monitor detect                                                # 当前检测（一次性）
+browser-monitor detect --type=captcha,ip-banned,flow-abnormal         # 指定检测类型
+
+# === 告警 ===
+browser-monitor alert --rule=captcha-detected \
+    --channel=qqbot --target=<openid>                                  # 配置告警
+browser-monitor alert test --channel=qqbot                            # 测试告警推送
+browser-monitor alert list                                            # 查看所有告警规则
+
+# === 日志 ===
+browser-monitor logs [--tail=100] [--filter=error]                     # 查看日志
+browser-monitor logs aggregate --from=2026-08-10 --to=2026-08-11      # 聚合统计
+
+# === 状态 ===
+browser-monitor status                                                # 当前监控状态
+browser-monitor history [--since=1h]                                   # 历史事件
 ```
+
+**告警规则示例（rules/captcha-detected.yaml）**：
+```yaml
+rule_name: captcha-detected
+description: 检测到验证码时告警
+
+# 触发条件
+trigger:
+  type: dom_match
+  selectors:
+    - ".geetest_holder"               # 极验滑条
+    - "#nc_1_wrapper"                  # 阿里云滑条
+    - ".hcapcha-widget"                # hCaptcha
+    - "iframe[src*=recaptcha]"         # reCAPTCHA
+  match_mode: any                     # 任一匹配即触发
+
+# 告警严重度
+severity: high                         # low | medium | high | critical
+
+# 动作
+actions:
+  - type: qqbot_send
+    target: "<openid>"                # 锡哥 openid
+    message: "🚨 检测到验证码！请介入（浏览器={browser}, 页面={url}）"
+  
+  - type: workflow_pause               # 暂停工作流
+  - type: screenshot                   # 截图保存
+    output: "./logs/captcha-{timestamp}.png"
+
+# 抑制规则（避免重复告警）
+suppress:
+  cooldown_sec: 300                   # 5 分钟内不重复告警
+  only_first_in_session: false        # 每次都告警（不限于首次）
+```
+
+**告警规则示例（rules/ip-banned.yaml）**：
+```yaml
+rule_name: ip-banned
+description: IP 被封禁（限制访问）
+
+trigger:
+  type: page_match
+  url_patterns:
+    - "*error*"
+    - "*banned*"
+    - "*forbidden*"
+  text_match:
+    selectors: ["body"]
+    patterns: ["访问受限", "您的IP已被封禁", "请输入验证码", "403 Forbidden"]
+
+severity: critical
+
+actions:
+  - type: qqbot_send
+    target: "<openid>"
+    message: "🚨 IP 被封禁！当前 IP={ip}, 需要换代理"
+  - type: proxy_switch                # 切代理（如已配）
+  - type: workflow_abort              # 中断工作流
+
+suppress:
+  cooldown_sec: 600
+```
+
+**错误码**：
+| code | 含义 |
+|---|---|
+| `M001` | 监控目标不在线 |
+| `M002` | 告警渠道不可用（QQ Bot 断连）|
+| `M003` | 检测器误报 |
+| `M004` | 告警抑制中 |
 
 ---
 
@@ -998,6 +1596,582 @@ properties:
 
 ---
 
+### 8.1 weibo-login.rbs（完整内容）
+
+```yaml
+# hub/workflows/weibo-login.rbs
+# 微博自动登录 + 验证码处理 + 保存 cookie
+name: weibo-login
+version: "1.0"
+description: 微博自动登录，启用 stealth 防检测，带人类化操作，验证码检测后告警 + 人工介入
+author: Ducky Tan
+tags: [login, weibo, social, captcha-handling]
+
+# === 默认配置 ===
+defaults:
+  browser: dasheng
+  profile: human-casual
+  timeout: 30
+  output_dir: "./logs/weibo-login"
+
+# === 变量声明 ===
+vars:
+  username: ${ENV.WEIBO_USER}
+  password: ${ENV.WEIBO_PASS}
+  max_retry: 3
+  captcha_human_timeout_sec: 120
+  output_format: md
+
+# === 钩子（全局） ===
+hooks:
+  before_each:
+    - skill: browser-humanizer
+      action: delay
+      args: {min: 500, max: 1500}
+  on_fail:
+    - skill: browser-humanizer
+      action: pause
+      args: {min: 1, max: 3}
+    - skill: browser-monitor
+      action: detect
+      args: {types: [captcha, ip-banned]}
+  on_done:
+    - skill: browser-state-mgr
+      action: cookies-export
+      args: {browser: ${defaults.browser}, domain: "weibo.com", output: "./states/weibo.json"}
+
+# === 步骤 ===
+steps:
+  - id: warmup_browser
+    skill: browser-connector
+    action: warmup
+    args: {browser: ${defaults.browser}, wait_until_ready: true}
+    on_fail: halt
+
+  - id: enable_stealth
+    skill: browser-anti-detect
+    action: stealth
+    args: {browser: ${defaults.browser}, profile: "windows-chrome"}
+    after: warmup_browser
+
+  - id: detect_initial_stealth
+    skill: browser-anti-detect
+    action: check
+    args: {browser: ${defaults.browser}, url: "https://bot.sannysoft.com"}
+    after: enable_stealth
+    expect:
+      not_contains_text: ["webdriver", "automation"]
+    on_fail:
+      - skill: browser-anti-detect
+        action: inject
+        args: {browser: ${defaults.browser}, plugins: [webdriver-hide, canvas-noise]}
+      - retry: detect_initial_stealth
+        max: 2
+
+  - id: nav_login
+    skill: browser-operator
+    action: nav
+    args: {url: "https://weibo.com/login"}
+    after: detect_initial_stealth
+    expect: {url_contains: "weibo.com/login"}
+    retry: {max: 2, backoff: exponential}
+
+  - id: think_pause
+    skill: browser-humanizer
+    action: pause
+    args: {min: 1.5, max: 3.0}
+    after: nav_login
+
+  - id: type_username
+    skill: browser-operator
+    action: click
+    args: {selector: "input[name=username]"}
+    after: think_pause
+    hooks:
+      before:
+        - skill: browser-humanizer
+          action: move-to
+          args: {selector: "input[name=username]", jitter: 5, duration: variable}
+
+  - id: type_username_text
+    skill: browser-humanizer
+    action: type
+    args:
+      selector: "input[name=username]"
+      text: ${vars.username}
+      typo_rate: 0.03
+      typo_backspace: true
+      delay_per_char: variable
+    after: type_username
+
+  - id: think_pause_2
+    skill: browser-humanizer
+    action: pause
+    args: {min: 0.5, max: 1.5}
+    after: type_username_text
+
+  - id: type_password
+    skill: browser-humanizer
+    action: type
+    args:
+      selector: "input[name=password]"
+      text: ${vars.password}
+      typo_rate: 0.02
+      delay_per_char: variable
+    after: think_pause_2
+
+  - id: think_pause_3
+    skill: browser-humanizer
+    action: pause
+    args: {min: 0.8, max: 2.0}
+    after: type_password
+
+  - id: click_login
+    skill: browser-operator
+    action: click
+    args: {selector: ".login-btn, [type=submit]"}
+    after: think_pause_3
+    expect:
+      url_contains: ["weibo.com/u/", "weibo.com/home"]
+      or:
+        dom_exists: ".geetest_holder, #nc_1_wrapper, .hcapcha-widget"
+    on_fail:
+      - skill: browser-monitor
+        action: detect
+        args: {types: [captcha, flow-abnormal]}
+      - skill: browser-humanizer
+        action: pause
+        args: {min: 2, max: 4}
+      - retry: click_login
+        max: ${vars.max_retry}
+
+  - id: handle_captcha_if_present
+    skill: browser-monitor
+    action: detect
+    args: {types: [captcha]}
+    after: click_login
+    branches:
+      - when: {detected: captcha}
+        then:
+          - skill: browser-monitor
+            action: alert
+            args:
+              rule: captcha-detected
+              channel: qqbot
+              target: ${ENV.TARGET_OPENID}
+              message: "🚨 微博登录遇到验证码，请人工介入（120 秒超时）"
+          - skill: browser-humanizer
+            action: pause
+            args: {min: 5, max: ${vars.captcha_human_timeout_sec}}
+            description: 等待人工介入
+          - skill: browser-operator
+            action: wait
+            args: {selector: ".user-name, .gn_name, [href*='/u/']", timeout: ${vars.captcha_human_timeout_sec}}
+
+  - id: verify_login
+    skill: browser-operator
+    action: eval
+    args: {expr: "document.querySelector('.user-name, .gn_name')?.innerText"}
+    after: handle_captcha_if_present
+    expect:
+      not_empty: true
+    on_fail:
+      - skill: browser-monitor
+        action: alert
+        args:
+          rule: login-failed
+          message: "❌ 微博登录失败，请检查"
+      - fail: "登录失败，未找到用户名"
+
+# === 手动使用方式 ===
+# browser-hub run weibo-login.rbs \
+#   --vars WEIBO_USER=xxx --vars WEIBO_PASS=yyy \
+#   --vars TARGET_OPENID=8A3F643D...
+#
+# 或 .env 文件：
+# WEIBO_USER=xxx
+# WEIBO_PASS=yyy
+# TARGET_OPENID=8A3F643D...
+# browser-hub run weibo-login.rbs --vars-from=.env
+```
+
+---
+
+### 8.2 bilibili-up.rbs（完整内容）
+
+```yaml
+# hub/workflows/bilibili-up.rbs
+# B 站 UP 主主页数据提取
+name: bilibili-up
+version: "1.0"
+description: 提取 B 站 UP 主主页数据（粉丝 / 播放 / 简介）
+author: Ducky Tan
+tags: [extract, bilibili, kOL-data]
+
+defaults:
+  browser: xiaobai
+  profile: human-scripted
+  timeout: 60
+  output_dir: "./data/bilibili"
+
+vars:
+  up_mid: ${ENV.BILIBILI_UP_MID}      # UP 主 ID
+  output_format: json                 # json | md | csv
+
+hooks:
+  before_each:
+    - skill: browser-humanizer
+      action: delay
+      args: {min: 200, max: 800}
+
+steps:
+  - id: connect
+    skill: browser-connector
+    action: connect
+    args: {browser: ${defaults.browser}, session_reuse: true}
+
+  - id: nav_up_home
+    skill: browser-operator
+    action: nav
+    args: {url: "https://space.bilibili.com/${vars.up_mid}/"}
+    after: connect
+    expect: {url_contains: "space.bilibili.com"}
+
+  - id: check_login_required
+    skill: browser-monitor
+    action: detect
+    args: {types: [login-required]}
+    after: nav_up_home
+
+  - id: wait_loaded
+    skill: browser-operator
+    action: wait
+    args: {selector: ".b-info .name, .up-name", timeout: 15}
+    after: check_login_required
+
+  - id: extract_data
+    skill: browser-extractor
+    action: extract
+    args:
+      template: bilibili-up
+      url: "https://space.bilibili.com/${vars.up_mid}/"
+      output: "${vars.output_dir}/up-${vars.up_mid}.${vars.output_format}"
+      format: ${vars.output_format}
+    after: wait_loaded
+
+  - id: extract_recent_videos
+    skill: browser-extractor
+    action: extract
+    args:
+      template: bilibili-recent-videos
+      url: "https://space.bilibili.com/${vars.up_mid}/"
+      output: "${vars.output_dir}/up-${vars.up_mid}-videos.json"
+    after: extract_data
+
+  - id: summary
+    skill: browser-operator
+    action: eval
+    args:
+      expr: |
+        ({
+          name: document.querySelector('.b-info .name, .up-name')?.innerText,
+          mid: window.location.pathname.match(/(\d+)/)?.[1],
+          fans: document.querySelector('#n-fans')?.innerText,
+          following: document.querySelector('#n-following')?.innerText,
+          likes: document.querySelector('#n-like')?.innerText,
+          plays: document.querySelector('#n-playnum')?.innerText,
+          intro: document.querySelector('.desc-info, .up-description')?.innerText,
+          verified: document.querySelector('.i-fa-crown, .official-icon') ? true : false
+        })
+    after: extract_recent_videos
+
+  - id: save_summary
+    skill: browser-operator
+    action: storage
+    args: {local: true, key: "bilibili-up-${vars.up_mid}", value: <summary>}
+    after: summary
+
+# === 使用方式 ===
+# browser-hub run bilibili-up.rbs --vars BILIBILI_UP_MID=123456
+# 输出：./data/bilibili/up-123456.json + up-123456-videos.json
+```
+
+---
+
+### 8.3 wechat-article.rbs（完整内容）
+
+```yaml
+# hub/workflows/wechat-article.rbs
+# 微信公众号文章抓取
+name: wechat-article
+version: "1.0"
+description: 微信公众号文章抓取为 Markdown
+author: Ducky Tan
+tags: [extract, wechat, article]
+
+defaults:
+  browser: xiaobai
+  profile: human-scripted
+  timeout: 60
+  output_dir: "./data/wechat"
+
+vars:
+  article_url: ${ENV.WECHAT_ARTICLE_URL}
+  output_format: md
+  download_images: true
+
+hooks:
+  before_each:
+    - skill: browser-humanizer
+      action: delay
+      args: {min: 300, max: 1200}
+
+steps:
+  - id: connect
+    skill: browser-connector
+    action: connect
+    args: {browser: ${defaults.browser}}
+
+  - id: nav_article
+    skill: browser-operator
+    action: nav
+    args: {url: ${vars.article_url}}
+    after: connect
+    expect: {url_contains: ["mp.weixin.qq.com/s", "__biz"]}
+
+  - id: wait_content
+    skill: browser-operator
+    action: wait
+    args: {selector: "#js_content, .rich_content", timeout: 15}
+    after: nav_article
+
+  - id: think_pause
+    skill: browser-humanizer
+    action: pause
+    args: {min: 1, max: 2}
+    after: wait_content
+
+  - id: extract_article
+    skill: browser-extractor
+    action: extract
+    args:
+      template: wechat-article
+      url: ${vars.article_url}
+      output: "${vars.output_dir}/$(date +%Y%m%d)-$(basename ${vars.article_url}).md"
+      format: md
+      download_images: ${vars.download_images}
+    after: think_pause
+
+  - id: extract_metadata
+    skill: browser-extractor
+    action: extract
+    args:
+      template: wechat-article-meta
+      output: "${vars.output_dir}/$(date +%Y%m%d)-meta.json"
+    after: extract_article
+
+# === 使用方式 ===
+# browser-hub run wechat-article.rbs --vars WECHAT_ARTICLE_URL=https://mp.weixin.qq.com/s/xxx
+```
+
+---
+
+### 8.4 slider-captcha.rbs（完整内容）
+
+```yaml
+# hub/workflows/slider-captcha.rbs
+# 滑条验证码自动化处理（适用于极验 / 阿里云 / hCaptcha 等）
+name: slider-captcha
+version: "1.0"
+description: 识别并拖动滑条验证码
+author: Ducky Tan
+tags: [captcha, slider, anti-bot]
+
+defaults:
+  browser: dasheng
+  profile: human-casual
+  timeout: 60
+
+vars:
+  page_url: ${ENV.PAGE_URL}
+  max_retry: 5
+
+hooks:
+  before_each:
+    - skill: browser-humanizer
+      action: delay
+      args: {min: 500, max: 1500}
+
+steps:
+  - id: connect
+    skill: browser-connector
+    action: connect
+    args: {browser: ${defaults.browser}}
+
+  - id: enable_stealth
+    skill: browser-anti-detect
+    action: stealth
+    args: {browser: ${defaults.browser}, profile: "windows-chrome"}
+    after: connect
+
+  - id: nav_page
+    skill: browser-operator
+    action: nav
+    args: {url: ${vars.page_url}}
+    after: enable_stealth
+
+  - id: detect_slider
+    skill: browser-monitor
+    action: detect
+    args: {types: [slider-captcha]}
+    after: nav_page
+    branches:
+      - when: {not_detected: slider}
+        then:
+          - fail: "页面未发现滑条验证码"
+
+  - id: drag_slider
+    skill: browser-humanizer
+    action: drag
+    args:
+      from_selector: ".geetest_holder .geetest_slider_button, #nc_1_wrapper .nc_icon, .hcapcha-slider"
+      to_selector: ".geetest_holder .geetest_slicebg, #nc_1_wrapper .nc_scale, .hcapcha-slider-end"
+      curve: bezier
+      steps: {min: 20, max: 30}
+      speed: variable
+      acceleration: natural
+      overshoot_then_back: 2
+      jitter_amplitude: 3
+    after: detect_slider
+    retry: {max: ${vars.max_retry}, backoff: exponential}
+
+  - id: verify_slider
+    skill: browser-monitor
+    action: detect
+    args: {types: [captcha-solved, captcha-failed]}
+    after: drag_slider
+    on_fail:
+      - skill: browser-humanizer
+        action: pause
+        args: {min: 2, max: 5}
+      - skill: browser-anti-detect
+        action: rotate-fingerprint
+        args: {profile: macos-safari}
+      - retry: drag_slider
+        max: ${vars.max_retry}
+
+  - id: continue_workflow
+    skill: browser-operator
+    action: wait
+    args: {selector: ".geetest_success, #nc_1_wrapper .nc-lang-cnt, .hcapcha-success", timeout: 10}
+    after: verify_slider
+    on_fail:
+      - skill: browser-monitor
+        action: alert
+        args:
+          rule: captcha-unsolvable
+          message: "❌ 滑条验证码无法解决，需人工介入"
+
+# === 使用方式 ===
+# browser-hub run slider-captcha.rbs --vars PAGE_URL=https://example.com/captcha-page
+```
+
+---
+
+### 8.5 batch-fetch.rbs（完整内容）
+
+```yaml
+# hub/workflows/batch-fetch.rbs
+# 批量 URL 抓取（并发控制）
+name: batch-fetch
+version: "1.0"
+description: 批量 URL 抓取为 Markdown，并发控制
+author: Ducky Tan
+tags: [batch, extract, parallel]
+
+defaults:
+  browser: xiaobai
+  profile: human-scripted
+  timeout: 600
+  concurrency: 3                       # 并发浏览器数
+  output_dir: "./data/batch"
+
+vars:
+  urls_file: ${ENV.URLS_FILE}
+  extract_template: ${ENV.EXTRACT_TEMPLATE}
+  output_format: md
+
+hooks:
+  before_each:
+    - skill: browser-humanizer
+      action: delay
+      args: {min: 200, max: 600}
+
+steps:
+  - id: load_urls
+    skill: browser-runner
+    action: load-file
+    args:
+      file: ${vars.urls_file}
+      format: json|yaml|tsv              # 支持多种格式
+      output_var: "urls"
+    on_fail:
+      - fail: "加载 URL 列表失败，检查 ${vars.urls_file}"
+
+  - id: validate_urls
+    skill: browser-runner
+    action: validate
+    args:
+      urls: <urls>
+      require: ["url"]
+      max: 1000
+    after: load_urls
+
+  - id: parallel_fetch
+    skill: browser-runner
+    action: parallel
+    args:
+      concurrency: ${defaults.concurrency}
+      items_var: "urls"
+      for_each:
+        id: "fetch_${index}"
+        skill: browser-extractor
+        action: extract
+        args:
+          template: ${vars.extract_template}
+          url: "${item.url}"
+          output: "${vars.output_dir}/$(date +%Y%m%d)/${index}-${item.title|slugify}.${vars.output_format}"
+          format: ${vars.output_format}
+        on_fail:
+          - skill: browser-monitor
+            action: alert
+            args:
+              rule: batch-item-failed
+              message: "⚠️ ${item.url} 抓取失败: ${error}"
+          - continue                    # 不中断批次
+
+  - id: summary
+    skill: browser-runner
+    action: aggregate
+    args:
+      results: <parallel_fetch>
+      output: "${vars.output_dir}/summary.json"
+      stats: [success_count, fail_count, total_duration_sec]
+
+# === urls_file 格式示例（urls.yaml）===
+# - url: https://example.com/article/1
+#   title: 第一篇
+# - url: https://example.com/article/2
+#   title: 第二篇
+
+# === 使用方式 ===
+# browser-hub run batch-fetch.rbs \
+#   --vars URLS_FILE=./urls.yaml \
+#   --vars EXTRACT_TEMPLATE=wechat-article
+```
+
+---
+
 ## 9. 实施阶段（P1-P12）
 
 ### 9.1 阶段总览
@@ -1124,9 +2298,163 @@ P1 (骨架)
 
 ---
 
-## 13. 锡哥下一步
+## 13. install.sh（项目级安装脚本）
 
-锡哥看完段 1 + 段 2 后告诉我：
+```bash
+#!/bin/bash
+# install.sh - BAP 项目级安装脚本
+# 用法: bash install.sh [--uninstall] [--dry-run]
+
+set -e
+
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+SKILLS_DIR="$HOME/.agents/skills"
+BAP_HOME="$HOME/.bap"
+
+# === 子 skill 清单 ===
+SUBSKILLS=(
+  "browser-hub:hub"
+  "browser-connector:connector"
+  "browser-operator:operator"
+  "browser-runner:runner"
+  "browser-humanizer:humanizer"
+  "browser-anti-detect:anti-detect"
+  "browser-recorder:recorder"
+  "browser-extractor:extractor"
+  "browser-state-mgr:state-manager"
+  "browser-monitor:monitor"
+)
+
+# === 安装 ===
+install() {
+  echo "🛠 BAP 项目安装"
+  echo "项目根: $PROJECT_ROOT"
+  echo "skills 目录: $SKILLS_DIR"
+  echo ""
+  
+  # 1. 创建 skills 目录
+  mkdir -p "$SKILLS_DIR"
+  
+  # 2. 创建 ~/.bap/ 上下文目录
+  mkdir -p "$BAP_HOME/context"
+  mkdir -p "$BAP_HOME/states"
+  mkdir -p "$BAP_HOME/logs"
+  
+  # 3. 软链接子 skill
+  echo "📁 软链接子 skill → $SKILLS_DIR"
+  for entry in "${SUBSKILLS[@]}"; do
+    IFS=':' read -r name dir <<< "$entry"
+    
+    if [ ! -d "$PROJECT_ROOT/$dir" ]; then
+      echo "  ⚠️ 跳过 $name (目录 $dir 不存在)"
+      continue
+    fi
+    
+    target="$SKILLS_DIR/$name"
+    if [ -L "$target" ] || [ -e "$target" ]; then
+      echo "  🔄 移除旧链接 $name"
+      rm -rf "$target"
+    fi
+    
+    ln -sf "$PROJECT_ROOT/$dir" "$target"
+    echo "  ✅ $name → $target"
+  done
+  
+  # 4. 创建 bap CLI 快捷方式
+  echo ""
+  echo "🔧 创建 bap 快捷方式"
+  cat > "$PROJECT_ROOT/bin/bap" <<'EOF'
+#!/bin/bash
+exec browser-hub "$@"
+EOF
+  chmod +x "$PROJECT_ROOT/bin/bap"
+  
+  if [ -w /usr/local/bin ]; then
+    ln -sf "$PROJECT_ROOT/bin/bap" /usr/local/bin/bap
+    echo "  ✅ bap → /usr/local/bin/bap"
+  else
+    echo "  ⚠️ 需要 sudo 创建 /usr/local/bin/bap 软链接"
+  fi
+  
+  # 5. 验证安装
+  echo ""
+  echo "✔️ 验证安装"
+  for entry in "${SUBSKILLS[@]}"; do
+    IFS=':' read -r name dir <<< "$entry"
+    if [ -L "$SKILLS_DIR/$name" ]; then
+      echo "  ✅ $name"
+    else
+      echo "  ❌ $name (软链接丢失)"
+    fi
+  done
+  
+  echo ""
+  echo "🎉 BAP 安装完成！"
+  echo "使用："
+  echo "  browser-hub list                  # 列出子 skill"
+  echo "  browser-hub run <workflow.rbs>    # 执行工作流"
+  echo "  browser-hub list-workflows        # 列出内置模板"
+}
+
+# === 卸载 ===
+uninstall() {
+  echo "🗑 BAP 项目卸载"
+  
+  for entry in "${SUBSKILLS[@]}"; do
+    IFS=':' read -r name dir <<< "$entry"
+    target="$SKILLS_DIR/$name"
+    
+    if [ -L "$target" ]; then
+      if [ "$(readlink "$target")" = "$PROJECT_ROOT/$dir" ]; then
+        rm -f "$target"
+        echo "  ✅ 删除软链接 $name"
+      else
+        echo "  ⚠️ $name 不是 BAP 软链接，跳过"
+      fi
+    fi
+  done
+  
+  if [ -L /usr/local/bin/bap ]; then
+    rm -f /usr/local/bin/bap
+    echo "  ✅ 删除 /usr/local/bin/bap"
+  fi
+  
+  echo ""
+  echo "✔️ BAP 卸载完成（~/.bap/ 保留，你手动删 rm -rf ~/.bap）"
+}
+
+# === 入口 ===
+case "${1:-install}" in
+  install) install ;;
+  uninstall) uninstall ;;
+  --uninstall) uninstall ;;
+  --dry-run)
+    echo "🔍 干运行模式（不实际安装）"
+    echo "将安装 ${#SUBSKILLS[@]} 个子 skill"
+    echo ""
+    install
+    uninstall  # 不真装，安装完马上卸载
+    ;;
+  *)
+    echo "用法: $0 [install|uninstall|--dry-run]"
+    exit 1
+    ;;
+esac
+```
+
+**使用方式**：
+```bash
+cd ~/projects/browser-automation-platform
+bash install.sh                  # 安装
+bash install.sh --dry-run        # 预演（不实际安装）
+bash install.sh --uninstall      # 卸载
+```
+
+---
+
+## 14. 锡哥下一步
+
+锡哥看完整文档（§1-§13）后告诉我：
 
 | # | 决策 | 选项 |
 |---|---|---|
@@ -1139,9 +2467,12 @@ P1 (骨架)
 
 ---
 
-_本方案 v3.0 · 完整版 · 8-10 16:20 · 待三司会审_
+_本方案 v3.0 · 完整版 · 8-10 16:36 · 待三司会审_
 
-**附录 A**（段 1）：基础架构 5 章 — 已发
-**附录 B**（段 2 · 本文档）：详细设计 + 实施 8 章 — 本文件
+**补完章节说明**：
+- §6.1-6.9：9 个子 skill 完整 CLI 接口 + 错误码 + 示例代码（不全的都已补）
+- §8.1-8.5：5 个完整 .rbs 模板（之前只列了名字，现在全部完整）
+- §13：install.sh 完整脚本（新增）
+- §14：锡哥下一步（修订）
 
 **总字数**：段 1 (12.7KB) + 段 2 (18KB) = **30.7KB**
