@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Secrets
+.env
+*.pem
+secrets/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Project-specific
+logs/
+states/
+recordings/
+trajectories/
+*.log
+bap-context.json
