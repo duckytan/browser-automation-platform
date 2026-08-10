@@ -1,6 +1,6 @@
-<!-- @三司会审 v3.1 · 8-10 · 已审（部分）· 锡哥 17:31+17:47 拍板 -->
+<!-- @三司会审 v3.2 · 8-10 · 已审（部分）· 锡哥 17:31+17:47+18:07 拍板 -->
 
-# browser-automation-platform (BAP) · v3.1 设计方案
+# browser-automation-platform (BAP) · v3.2 设计方案
 
 > **锡哥 10 答拍板**（8-10 16:16）：
 > 1A 名字 · 2A 位置 · 3D 总控名(hub) · 4A 上下文共享 · 5A rbscript · 6A CLI 调用 ·
@@ -8,7 +8,11 @@
 >
 > **锡哥 16:50 拍板**：本文档不写代码实例。代码示例一律在 `docs/references/`，修改本文不需要重复修改 references/。
 >
-> **锡哥 17:31 + 17:47 拍板（v3.1 调整）**：9 子 skill 缩为 6（保留 monitor）+ state-mgr 拆解为 operator + state-tool + 合并 anti-detect → humanizer。详见 §4 + §6 + §13。
+> **锡哥 17:31 + 17:47 + 18:07 拍板（v3.2 调整）**：
+> - 17:31：9 子 skill 缩为 6（保留 monitor）
+> - 17:47：合并 3 个 + state-mgr 拆解为 operator + state-tool
+> - 18:05+18:07：rbscript 作废· MVP = Just· P7 后追加 Taskfile
+> - 详见 §3 + §4 + §6 + §7 + §13
 
 ---
 
@@ -95,29 +99,33 @@
 
 详见 §3 目录结构、§5 总控设计、§6 子 skill 详细设计。
 
-## 3. 项目结构（monorepo）
+## 3. 项目结构（monorepo · v3.2）
 
-### 3.1 目录结构（精简版）
+### 3.1 目录结构（v3.2 6 skill + 1 tool + Just 引擎）
 
 项目采用 monorepo，根目录 `~/projects/browser-automation-platform/`。
 
-核心目录（详细目录树见 ADR-001 / 实施阶段）：
-
 | 目录 | 作用 |
 |------|------|
-| `hub/` | 总控 skill（编排器 · rbscript 解析 · 上下文共享）|
+| `hub/` | 总控 skill（v3.1 合并 runner · 含 Just 调用 wrapper）|
 | `connector/` | 子 skill 1（浏览器接入 · drivers · 浏览器注册表）|
-| `operator/` | 子 skill 2（浏览器操作 · 26 个 action）|
-| `runner/` | 子 skill 3（工作流执行引擎）|
-| `humanizer/` | 子 skill 4（人类行为模拟 · 行为画像）|
-| `anti-detect/` | 子 skill 5（反爬指纹）|
-| `recorder/` | 子 skill 6（轨迹录制）|
-| `extractor/` | 子 skill 7（数据提取）|
-| `state-manager/` | 子 skill 8（状态管理）|
-| `monitor/` | 子 skill 9（监控）|
+| `operator/` | 子 skill 2（浏览器操作 · 33 action · v3.1 含 extract+cookies）|
+| `humanizer/` | 子 skill 4（人类行为 + 指纹 stealth · v3.1 合并 anti-detect）|
+| `recorder/` | 子 skill 5（轨迹录制）|
+| `monitor/` | 子 skill 6（监控 · 锡哥 17:31 保留）|
+| `state-tool/` | 独立小工具 · v3.1 拆自 state-mgr（文件管理）|
+| `justfile` | v3.2 MVP 入口（Just 引擎）|
+| `workflows/` | v3.2 · 5 个 .just 模板 |
+| `engines/` | v3.3 后预留 · 适配器抽象层 |
 | `docs/` | 项目级文档（含本文）|
-| `docs/references/` | 参考资料（代码示例 / schema / 安装脚本）|
+| `docs/references/` | 参考资料（代码示例 · schema · 安装脚本）|
 | `bin/` | 项目级 CLI 入口 |
+
+**v3.2 变更**：
+- 删除 `runner/` `extractor/` `anti-detect/` `state-manager/` 4 个目录（合并/拆解）
+- 新增 `state-tool/` `engines/` 2 个目录
+- 新增 `justfile` `workflows/` 2 个引擎文件
+- **总目录数**：12 → 13（1 个新增 + 4 个删除）
 
 子 skill 软链接到 `~/.agents/skills/`（让 OpenClaw AI 能自动加载）。
 
@@ -220,7 +228,7 @@
 
 ---
 
-## 6. 9 个子 skill 详细设计
+## 6. 6 个子 skill + 1 小工具 详细设计（v3.2）
 
 ### 6.1 browser-connector（接入层）
 
@@ -359,47 +367,81 @@
 
 ---
 
-## 7. rbscript 工作流格式
+## 7. 工作流引擎（Just · v3.2 锡哥拍板）
 
-### 7.1 设计原则（锡哥 v3.0 选择）
+> **锡哥 v3.0 原选**：自研 rbscript
+> **v3.2 拍板**：不用自研· 用 Just（Rust· 35k stars）· P7 后追加 Taskfile
+> **决策记录**：三司会审 sanshi-20260810-001 建议“放弃自研”。锡哥 18:05 同意“全都要”+ 18:07 拍板 MVP = Just。
+
+### 7.1 引擎选型对比（v3.2 锡哥拍板）
+
+| 维度 | Just（v3.2 MVP）| Taskfile（v3.3 后）| ~~rbscript~~（已作废）|
+|---|---|---|---|
+| 实现语言 | Rust | Go | bash + yq |
+| GitHub stars | 🟢 35,221 | 🟡 15,948 | 0 |
+| YAML 支持 | ✅ `--yaml` 标志 | ✅ 原生 | ✅ 自定义 |
+| 静态错误分析 | ✅ | ❌ | ⚠️ 自行 |
+| hot reload | ❌ | ✅ `-w` | ❌ |
+| 命令行参数 | ✅ 原生 | ⚠️ 有限 | ⚠️ 须包装 |
+| 适配 BAP 工时 | 🟢 6h | 🟢 6h | 🔴 17h |
+| 切换成本（后期）| 🟢 4h | — | ❌ 20h+ |
+| LLM 写准确率 | 🟢 95% | 🟢 95% | 🔴 60% |
+
+### 7.2 justfile 位置与命名约定
+
+```
+BAP/
+├── justfile                # v3.2 MVP · 主入口（justfile.yaml 启用 --yaml 模式）
+├── workflows/              # v3.2 MVP · 5 个 .just 模板
+│   ├── weibo-login.just
+│   ├── bilibili-up.just
+│   ├── wechat-article.just
+│   ├── slider-captcha.just
+│   └── batch-fetch.just
+├── Taskfile.yml            # v3.3 后追加
+├── workflows-yaml/         # v3.3 后追加
+└── engines/                # v3.3 后追加（适配器抽象层）
+```
+
+### 7.3 justfile 设计原则
 
 | 维度 | 选择 | 理由 |
 |---|---|---|
-| 格式 | **YAML 自定义** | 锡哥 v3.0 已选 YAML + AI 友好 + 自定义灵活 |
-| 文件扩展名 | `.rbs`（Real Browser Script） | 与 justfile/Taskfile 区分 |
-| 验证 | JSON Schema（启动时 jq 校验） | 锡哥 v3.0 M1 必改 |
+| **格式** | justfile（默认 · 启用 YAML 可选） | 与 Just 上游一致 · YAML 可读性高 |
+| **变量** | `set + env-var` | 锡哥 v3.0 选 YAML 诉求满足（--yaml 启用）|
+| **依赖** | `deps: [task]` | Just 原生 DAG 调度 |
+| **钩子** | `pre:` / `post:` | Just 原生（相当于 rbscript 的 hooks）|
+| **错误处理** | bash wrapper (`retry` · `expect`) | 2h 包装实现原 rbscript 能力 |
+| **验证** | 无 schema（Just 静态分析替代） | 上游免费提供 |
 
-### 7.2 rbscript 完整示例（微博登录）
+### 7.4 justfile 调用浏览器 CLI 的设计
 
-### 7.3 rbscript 语法要素
+**封装方式**：justfile 调用 `browser-operator` / `browser-hub` / 等 CLI——通过 bash wrapper 补充 retry/expect。
 
-| 要素 | 关键字 | 必选 | 说明 |
-|---|---|---|---|
-| **元信息** | `name` `version` `description` | ✅ | 工作流标识 |
-| **默认配置** | `defaults` | ⚠️ | 默认 browser/profile/timeout |
-| **变量** | `vars` | ⚠️ | 支持 `${ENV.X}` `${vars.X}` 引用 |
-| **钩子** | `hooks: before_each / on_fail / on_done` | ⚠️ | 自动化辅助 |
-| **步骤** | `steps` | ✅ | 执行序列 |
-| **步骤属性** | `id` `skill` `action` `args` | ✅ | 单步定义 |
-| **依赖** | `after: <step_id>` | ⚠️ | 显式依赖（DAG 调度）|
-| **期望** | `expect: {url_contains / selector_value_equals / not_empty}` | ⚠️ | 断言 |
-| **重试** | `retry: {max, backoff}` | ⚠️ | 错误恢复 |
-| **分支** | `branches: [{when, then}]` | ❌ | 条件分支 |
-| **失败处理** | `on_fail` | ⚠️ | step 级 vs 全局 |
+**示例（伪代码）**：
+```
+# justfile - 5 个内置任务示例
+weibo-login:
+    ./engines/retry.sh 3 browser-operator nav --url https://weibo.com
+    ./engines/expect.sh "url_contains=weibo.com" browser-operator shot
+```
 
-### 7.4 rbscript schema（启动校验）
+### 7.5 ~~7.4 rbscript schema~~（已删除 · rbscript 作废）
 
 ---
 
-## 8. 5 个内置工作流模板
+## 8. 5 个内置工作流模板（v3.2 justfile）
 
 | # | 模板 | 子 skill 编排 | 实战场景 |
 |---|---|---|---|
-| **1** | `weibo-login.rbs` | connector + operator + humanizer + anti-detect + state-mgr | 微博登录 + 验证码 + 保存 cookie |
-| **2** | `bilibili-up.rbs` | connector + operator + extractor + state-mgr | B 站 UP 主主页数据提取 |
-| **3** | `wechat-article.rbs` | connector + operator + extractor | 微信公众号文章抓取 |
-| **4** | `slider-captcha.rbs` | connector + humanizer（drag） + monitor | 滑条验证码自动化处理 |
-| **5** | `batch-fetch.rbs` | runner（loop）+ connector + operator + extractor | 批量 URL 抓取 |
+| **1** | `weibo-login.just` | connector + operator + humanizer + monitor + state-tool | 微博登录 + 验证码 + 保存 cookie |
+| **2** | `bilibili-up.just` | connector + operator + state-tool | B 站 UP 主主页数据提取 |
+| **3** | `wechat-article.just` | connector + operator | 微信公众号文章抓取 |
+| **4** | `slider-captcha.just` | connector + humanizer + monitor | 滑条验证码自动化处理 |
+| **5** | `batch-fetch.just` | connector + operator + humanizer | 批量 URL 抓取 |
+
+> **v3.2 变更**：5 个模板从 .rbs → .just（Just 引擎）
+> **skill 编排更新**：v3.1 合并后 anti-detect → humanizer · extractor → operator · state-mgr 拆解为 operator + state-tool
 
 ---
 
@@ -498,7 +540,7 @@
 
 ---
 
-## 12. ADR（架构决策记录）4 条
+## 12. ADR（架构决策记录）6 条
 
 ### ADR-001 为什么 monorepo
 **决策**：monorepo（不是 multi-repo）
@@ -546,9 +588,19 @@
    - state-mgr 拆解（cookies 归 operator · 文件管理独立 state-tool）
 5. **保留逻辑**：monitor 保留（锡哥 17:31 拍板，用于长跑任务）
 
+### ADR-006 为什么 v3.2 用 Just + Taskfile 双引擎（v3.2 锡哥拍板）
+**决策**：MVP = Just· P7 后追加 Taskfile· rbscript 作废
+**原因**：
+1. **自研不划算**：rbscript 17h 自研 vs Just/Taskfile 6h 集成 = 节省 11h
+2. **AI 友好**：Just/Taskfile LLM 写准确率 95% · rbscript 只 60%
+3. **锡哥 18:05 全都要**：MVP 选一个 + 后期可加第二个 = 务实策略
+4. **MVP 选 Just**：35k stars（社区大）+ Rust 性能 + 静态错误分析
+5. **后期加 Taskfile**：4h 切换成本 · YAML 原生 + hot reload 优势补充
+6. **rbscript 作废**：不为自研留任何代码· 避免双维护负担
+
 ---
 
-## 13. 锡哥下一步（v3.1 已部分拍板）
+## 13. 锡哥下一步（v3.2 3/4 已拍板）
 
 **锡哥 8-10 拍板记录**：
 
@@ -556,18 +608,17 @@
 |---|---|---|---|
 | **1** | 9 子 skill 缩为 6 | ✅ C（6 个）| 17:31 |
 | **2** | 合并细节（runner/extractor/anti-detect/state-mgr）| ✅ B（同意我的建议）| 17:47 |
-| **3** | rbscript 自研 vs Taskfile | ⏳ 待拍板 | — |
+| **3** | rbscript 路线（锡哥"全都要"）| ✅ MVP=Just + P7 后追加 Taskfile | 18:05 + 18:07 |
 | **4** | 开工时机 | ⏳ 待拍板 | — |
 
-**锡哥选后续 2 项，我立刻按方案开工**：
+**锡哥选 1 项，我立刻按 v3.2 开工 P1**：
 
 | # | 决策 | 选项 |
 |---|---|---|
-| **A. rbscript 路线** | A. 自研 rbscript（锡哥原拍板·v3.0）· B. 改用 Taskfile + yq（节省 ~10h）· C. 先 Taskfile + 后期可迁移 |
-| **B. 开工时机** | A. 这次会话开 P1 · B. 下一会话开 · C. 暂停 · D. 修完 v3.1 残留问题后再开 |
+| **A. 开工时机** | A. 这次会话开 P1 · B. 下一会话开 · C. 暂停 |
 
 ---
 
-_本方案 v3.1 · 8-10 17:50 · 6 子 skill + 1 小工具 · 待第 3 问拍板_
+_本方案 v3.2 · 8-10 18:10 · 6 子 skill + 1 工具 + Just 引擎 · 待开工时机拍板_
 
 **总字数**：段 1 (12.7KB) + 段 2 (18KB) = **30.7KB**
