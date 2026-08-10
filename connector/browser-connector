@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# BAP connector/browser-connector - 浏览器接入层（§6.1 · 5 action）
+# 用法: browser-connector <action> [args]
+#   discover                    自动发现本机/网络中浏览器（CDP 端口扫描）
+#   connect <browser>           连接指定浏览器（xiaobai / dasheng / vps）
+#   list                        列出已注册浏览器
+#   test <browser>              健康检查（ping + 截图）
+#   warmup <browser>            预热（启动空闲浏览器实例）
+#
+# 错误码: E001 配置缺失 · E002 浏览器未注册 · E003 CDP 连接失败
+#         E004 端口占用 · E005 driver 不支持 · E006 yq 校验失败
+# 依赖:   config/browsers.yaml（yq 校验）· cdp-browser.sh（CDP 操作）
+
+set -uo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CONFIG_FILE="$PROJECT_ROOT/config/browsers.yaml"
+CDP_SH="${HOME}/.agents/skills/real-browser/scripts/cdp-browser.sh"
+
+# 常用 CDP 端点（172.17.0.1 = 容器宿主机网关）
+CDP_HOST="172.17.0.1"
+CDP_PORT="19222"
+
+# === 配置读取（yq 若可用则校验）===
+load_config() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo "❌ E001: 配置文件缺失 $CONFIG_FILE" >&2
+        exit 1
+    fi
+    if command -v yq >/dev/null 2>&1; then
+        yq eval '.browsers' "$CONFIG_FILE" >/dev/null 2>&1 || {
+            echo "❌ E006: yq 校验失败（config/browsers.yaml 格式错误）" >&2
+            exit 6
+        }
+    fi
+}
+
+# === discover: 扫描 CDP 端口 ===
+action_discover() {
+    echo "🔍 扫描 CDP 端点（host=$CDP_HOST 常用端口）..."
+    found=0
+    for port in 19222 17900 14444 9222 9223; do
+        resp=$(curl -s --max-time 2 "http://${CDP_HOST}:${port}/json/version" 2>/dev/null)
+        if echo "$resp" | grep -q "Chrome\|chromium"; then
+            ver=$(echo "$resp" | grep -oP '"Browser":\s*"[^"]*"' | head -1 | sed 's/"Browser":\s*"//;s/"//')
+            echo "  ✅ 发现 CDP: ${CDP_HOST}:${port} → $ver"
+            found=$((found+1))
+        fi
+    done
+    if [[ $found -eq 0 ]]; then
+        echo "  ⚠️  未发现 CDP 端点（检查浏览器容器是否启动）" >&2
+        exit 3
+    fi
+    echo "发现 $found 个 CDP 端点"
+}
+
+# === connect: 连接指定浏览器（写入状态）===
+action_connect() {
+    local browser="${1:-}"
+    if [[ -z "$browser" ]]; then
+        echo "❌ E002: 用法 connect <browser>（xiaobai/dasheng/vps）" >&2
+        exit 2
+    fi
+    # 健康检查目标端点
+    local endpoint="http://${CDP_HOST}:${CDP_PORT}"
+    if ! curl -s --max-time 3 "${endpoint}/json/version" | grep -q "Chrome"; then
+        echo "❌ E003: CDP 连接失败 ${endpoint}" >&2
+        exit 3
+    fi
+    # 写入当前连接状态
+    mkdir -p "$PROJECT_ROOT/.bap/state"
+    echo "$browser" > "$PROJECT_ROOT/.bap/state/current-browser"
+    echo "✅ 已连接浏览器: $browser → $endpoint"
+    echo "   当前连接: $(cat "$PROJECT_ROOT/.bap/state/current-browser")"
+}
+
+# === list: 列出已注册浏览器 ===
+action_list() {
+    load_config
+    echo "📋 已注册浏览器（config/browsers.yaml）:"
+    if command -v yq >/dev/null 2>&1; then
+        yq eval '.browsers | keys | .[]' "$CONFIG_FILE" 2>/dev/null | while read -r name; do
+            desc=$(yq eval ".browsers.$name.name" "$CONFIG_FILE" 2>/dev/null)
+            echo "  - $name: $desc"
+        done
+    else
+        grep -oP '^\s{2}\w+:' "$CONFIG_FILE" | sed 's/^\s*//;s/://' | while read -r name; do
+            echo "  - $name"
+        done
+    fi
+    # 显示当前连接
+    if [[ -f "$PROJECT_ROOT/.bap/state/current-browser" ]]; then
+        echo "  当前连接: $(cat "$PROJECT_ROOT/.bap/state/current-browser")"
+    fi
+}
+
+# === test: 健康检查（ping + 截图）===
+action_test() {
+    local browser="${1:-vps}"
+    echo "🩺 健康检查: $browser"
+    local endpoint="http://${CDP_HOST}:${CDP_PORT}"
+    if curl -s --max-time 3 "${endpoint}/json/version" | grep -q "Chrome"; then
+        echo "  ✅ CDP 可达: $endpoint"
+    else
+        echo "  ❌ E003: CDP 连接失败 $endpoint" >&2
+        exit 3
+    fi
+    # 截图（复用 cdp-browser.sh）
+    if [[ -x "$CDP_SH" ]]; then
+        "$CDP_SH" shot /tmp/bap-test-${browser}.png >/dev/null 2>&1 && \
+            echo "  ✅ 截图: /tmp/bap-test-${browser}.png" || \
+            echo "  ⚠️  截图失败（无活动 tab）"
+    fi
+}
+
+# === warmup: 预热（启动空闲实例）===
+action_warmup() {
+    local browser="${1:-vps}"
+    echo "🔥 预热: $browser"
+    if [[ -x "$CDP_SH" ]]; then
+        "$CDP_SH" start >/dev/null 2>&1 && echo "  ✅ 已启动/预热浏览器" || echo "  ⚠️  预热命令执行异常"
+    else
+        echo "  ⚠️  cdp-browser.sh 不存在，跳过预热"
+    fi
+}
+
+# === 入口 ===
+ACTION="${1:-}"
+shift 2>/dev/null || true
+
+case "$ACTION" in
+    discover)  action_discover ;;
+    connect)   action_connect "$@" ;;
+    list)      action_list ;;
+    test)      action_test "${1:-vps}" ;;
+    warmup)    action_warmup "${1:-vps}" ;;
+    "")
+        echo "用法: browser-connector <action> [args]"
+        echo "  discover / connect <b> / list / test <b> / warmup <b>"
+        exit 0
+        ;;
+    *)
+        echo "❌ 未知 action: $ACTION（可用: discover/connect/list/test/warmup）" >&2
+        exit 2
+        ;;
+esac

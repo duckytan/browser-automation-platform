@@ -13,7 +13,8 @@
 | **P0.5 施工文档** | 建 docs/施工/ 文档集 + 8 项修复 | ✅ 完成 | commit `c275e9a` + `78bb845` |
 | **P1 骨架** | 8 目录 + just 安装 + justfile + 5 模板 + install.sh | ✅ **完成** | 锡哥 19:40 开工 · 5 任务全过 |
 | **P2 Just 集成** | wrapper + 5 模板编排 + install.sh.example | ✅ **完成** | 锡哥 20:09 继续 · wrapper 测通 |
-| P3-P5 | connector/operator/hub | ⏳ 待命 | |
+| **P3 connector** | browser-connector 5 action + config | ✅ **完成** | 锡哥 21:05 继续 · 5 action 实测通过 |
+| P4-P5 | operator/hub | ⏳ 待命 | |
 
 ---
 

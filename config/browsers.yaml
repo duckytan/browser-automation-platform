@@ -1,0 +1,43 @@
+browsers:
+  xiaobai:
+    name: "小白 (maelp/docker-vnc-chromium)"
+    image: maelp/docker-vnc-chromium:latest
+    novnc_url: "http://{host}:5800"
+    default_driver: cdp
+    drivers:
+      cdp:
+        endpoint: "http://{host}:19222"
+        ws_endpoint: "ws://{host}:19222"
+        protocol: WebSocket
+        health_check: "{endpoint}/json/version"
+    tags: [chromium, lightweight, production]
+
+  dasheng:
+    name: "大圣 (selenium/standalone-chrome:4)"
+    image: selenium/standalone-chrome:4.21.0
+    novnc_url: "http://{host}:17900"
+    default_driver: webdriver
+    drivers:
+      webdriver:
+        endpoint: "http://{host}:14444"
+        protocol: "HTTP + WebSocket (W3C WebDriver)"
+        health_check: "{endpoint}/status"
+        session_browser: chrome
+        startup_time_sec: 60
+      ws-cdp:
+        endpoint: "ws://{host}:14444/session/{sid}/se/cdp"
+        protocol: "WebSocket (Selenium BiDi)"
+        requires: webdriver
+    tags: [chrome, official, heavy, test]
+
+  vps:
+    name: "VPS Chrome (172.17.0.1 CDP)"
+    image: "宿主 docker Chrome"
+    default_driver: cdp
+    drivers:
+      cdp:
+        endpoint: "http://172.17.0.1:19222"
+        ws_endpoint: "ws://172.17.0.1:19222"
+        protocol: WebSocket
+        health_check: "http://172.17.0.1:19222/json/version"
+    tags: [chrome, vps, production]
