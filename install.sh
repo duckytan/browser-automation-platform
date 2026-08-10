@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# BAP install.sh - 软链接 6 skill 到 ~/.agents/skills/（仅 dry-run，需锡哥确认后真执行）
+# BAP install.sh - 软链接 BAP CLI 到 ~/.agents/skills/
 # 用法: bash install.sh --dry-run   # 打印计划不执行
-#       bash install.sh             # 真执行（锡哥确认后）
+#       bash install.sh             # 默认执行（真软链）
 
 set -euo pipefail
 
-# 6 个 BAP 子 skill（v3-design §1.3 · 朱熹 P2 补清单）
-SKILLS=(hub connector operator humanizer recorder monitor)
+# 已实现的 3 个 skill（hub/connector/operator）· humanizer/recorder/monitor 待 P6 建后追加
+SKILLS=(hub connector operator)
 
 # 源目录（本项目内，随 P2-P5 逐步填充）
 SRC_BASE="$(cd "$(dirname "$0")" && pwd)"

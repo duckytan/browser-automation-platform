@@ -20,6 +20,12 @@ ceval() {
     bash "$CDP_SH" eval "$1" 2>&1
 }
 
+# === selector 安全转义（JSON.stringify · 解含引号 selector 崩）===
+# 用 python3 生成 JSON 字符串字面量，含引号/特殊字符也能安全嵌入 JS
+jsel() {
+    python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+}
+
 # === 导航类 ===
 op_nav()    { bash "$CDP_SH" goto "${1:?OP001: 缺 URL}" 2>&1; }
 op_back()   { ceval 'history.back(); "back"' 2>&1; }
@@ -29,48 +35,58 @@ op_reload() { ceval 'location.reload(); "reload"' 2>&1; }
 # === 交互类 ===
 op_click() {
     local sel="${1:?OP001: 缺 selector}"
-    ceval "(function(){var el=document.querySelector(\"$sel\"); if(!el)return 'OP003: 未找到 $sel'; el.click(); return 'clicked: $sel';})()"
+    ceval "(function(){var el=document.querySelector($(jsel "$sel")); if(!el)return 'OP003: 未找到 $sel'; el.click(); return 'clicked: $sel';})()"
 }
 op_type() {
     local sel="${1:?OP001: 缺 selector}" text="${2:?OP001: 缺 text}"
-    ceval "(function(){var el=document.querySelector(\"$sel\"); if(!el)return 'OP003: 未找到 $sel'; el.focus(); el.value='$text'; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return 'typed: $text';})()"
+    ceval "(function(){var el=document.querySelector($(jsel "$sel")); if(!el)return 'OP003: 未找到 $sel'; el.focus(); el.value=$(jsel "$text"); el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return 'typed: $text';})()"
 }
 op_hover() {
     local sel="${1:?OP001: 缺 selector}"
-    ceval "(function(){var el=document.querySelector(\"$sel\"); if(!el)return 'OP003'; el.dispatchEvent(new MouseEvent('mouseover',{bubbles:true})); return 'hover: $sel';})()"
+    ceval "(function(){var el=document.querySelector($(jsel "$sel")); if(!el)return 'OP003'; el.dispatchEvent(new MouseEvent('mouseover',{bubbles:true})); return 'hover: $sel';})()"
 }
 op_scroll() {
-    local times="${1:-3}"
-    ceval "(function(){var t=$times,i=0;var iv=setInterval(function(){window.scrollBy(0,window.innerHeight);if(++i>=t)clearInterval(iv);},500);return 'scroll $times';})()"
+    local times="${1:-3}" step="${2:-800}"
+    # 逐屏滚动（每次独立 evaluate + 小步，避免一次多屏触发懒加载挂起）
+    # CDP evaluate 同步返回，小步滚动不触发大规模异步 fetch
+    ceval "(function(){var step=$step; window.scrollBy(0,step); return 'scrolled to y='+window.scrollY;})()"
+    # 剩余次数通过多次调用（每次独立 evaluate）
+    local i=1
+    while [[ $i -lt $times ]]; do
+        ceval "(function(){var step=$step; window.scrollBy(0,step); return 'scrolled to y='+window.scrollY;})()" >/dev/null 2>&1
+        sleep 0.5
+        i=$((i+1))
+    done
+    echo "scrolled $times steps"
 }
 op_select() {
     local sel="${1:?OP001: 缺 selector}" val="${2:?OP001: 缺 value}"
-    ceval "(function(){var el=document.querySelector(\"$sel\"); if(!el)return 'OP003'; el.value='$val'; el.dispatchEvent(new Event('change',{bubbles:true})); return 'selected: $val';})()"
+    ceval "(function(){var el=document.querySelector($(jsel "$sel")); if(!el)return 'OP003'; el.value=$(jsel "$val"); el.dispatchEvent(new Event('change',{bubbles:true})); return 'selected: $val';})()"
 }
 op_focus() {
     local sel="${1:?OP001: 缺 selector}"
-    ceval "(function(){var el=document.querySelector(\"$sel\"); if(!el)return 'OP003'; el.focus(); return 'focus: $sel';})()"
+    ceval "(function(){var el=document.querySelector($(jsel "$sel")); if(!el)return 'OP003'; el.focus(); return 'focus: $sel';})()"
 }
 op_blur()  { ceval 'document.activeElement.blur(); "blur"' 2>&1; }
 op_clear() {
     local sel="${1:?OP001: 缺 selector}"
-    ceval "(function(){var el=document.querySelector(\"$sel\"); if(!el)return 'OP003'; el.value=''; return 'cleared: $sel';})()"
+    ceval "(function(){var el=document.querySelector($(jsel "$sel")); if(!el)return 'OP003'; el.value=''; return 'cleared: $sel';})()"
 }
 
 # === 提取类 ===
 op_extract() {
     local sel="${1:?OP001: 缺 selector}" out="${2:-}"
     local data
-    data=$(ceval "(function(){var els=document.querySelectorAll(\"$sel\"); var r=[]; els.forEach(function(e){r.push(e.innerText||e.textContent||'');}); return JSON.stringify(r);})()")
+    data=$(ceval "(function(){var els=document.querySelectorAll($(jsel "$sel")); var r=[]; els.forEach(function(e){r.push(e.innerText||e.textContent||'');}); return JSON.stringify(r);})()")
     if [[ -n "$out" ]]; then echo "$data" > "$out"; echo "已写入 $out"; else echo "$data"; fi
 }
 op_extract_css() {
     local sel="${1:?OP001: 缺 selector}" prop="${2:?OP001: 缺 property}"
-    ceval "(function(){var el=document.querySelector(\"$sel\"); return el?getComputedStyle(el).getPropertyValue('$prop'):'OP003';})()"
+    ceval "(function(){var el=document.querySelector($(jsel "$sel")); return el?getComputedStyle(el).getPropertyValue('$prop'):'OP003';})()"
 }
 op_extract_xpath() {
     local xp="${1:?OP001: 缺 xpath}"
-    ceval "(function(){var r=document.evaluate(\"$xp\",document,null,XPathResult.STRING_TYPE,null); return r.stringValue;})()"
+    ceval "(function(){var r=document.evaluate($(jsel "$xp"),document,null,XPathResult.STRING_TYPE,null); return r.stringValue;})()"
 }
 op_extract_regex() {
     local re="${1:?OP001: 缺 regex}"
@@ -102,7 +118,9 @@ op_text()   { ceval 'document.body.innerText'; }
 op_eval()   { ceval "${1:?OP001: 缺 JS}"; }
 op_wait() {
     local sel="${1:?OP001: 缺 selector}" timeout="${2:-10}"
-    ceval "(function(){var sel=\"$sel\",t=$timeout*1000,start=Date.now();return new Promise(function(res){function chk(){var el=document.querySelector(sel);if(el){res('found: '+sel);}else if(Date.now()-start>t){res('timeout');}else{setTimeout(chk,200);}}chk();});})()" 2>&1 | head -1
+    local jsel_sel
+    jsel_sel=$(jsel "$sel")
+    ceval "(function(){var sel=$jsel_sel,t=$timeout*1000,start=Date.now();return new Promise(function(res){function chk(){var el=document.querySelector(sel);if(el){res('found: '+sel);}else if(Date.now()-start>t){res('timeout');}else{setTimeout(chk,200);}}chk();});})()" 2>&1 | head -1
 }
 
 # === 模板类 ===
@@ -111,7 +129,7 @@ op_extract_template() {
     [[ -f "$tpl" ]] || { echo "OP001: 模板不存在 $tpl" >&2; exit 1; }
     while IFS='=' read -r name sel; do
         [[ -z "$name" || "$name" =~ ^# ]] && continue
-        val=$(ceval "(function(){var el=document.querySelector(\"$sel\");return el?(el.innerText||el.textContent||''):'';})()")
+        val=$(ceval "(function(){var el=document.querySelector($(jsel "$sel"));return el?(el.innerText||el.textContent||''):'';})()")
         echo "$name=$val"
     done < "$tpl"
 }

@@ -4,50 +4,70 @@
 
 ## 🎯 项目目标
 
-构建一个**完整**的浏览器自动化平台，覆盖：
+构建一个**完整**的浏览器自动化平台（**模板化 SOP 平台**），覆盖：
 
 | 层 | 组件 |
 |---|---|
-| **总控** | `browser-hub`（编排器）|
-| **接入层** | `browser-connector`（CDP / WebDriver / ws-cdp）|
-| **操作层** | `browser-operator`（26+10 action）|
-| **脚本层** | `browser-runner`（rbscript 解释执行）|
-| **增强层** | `browser-humanizer` · `browser-anti-detect` · `browser-recorder` · `browser-extractor` · `browser-state-mgr` · `browser-monitor` |
+| **总控** | `browser-hub`（编排器 · 6 action）|
+| **接入层** | `browser-connector`（CDP · 5 action）|
+| **操作层** | `browser-operator`（33 action）|
+| **脚本层** | `engines/`（retry.sh · expect.sh wrapper）|
+| **增强层** | `browser-humanizer` · `browser-monitor` · `browser-recorder`（P6 实现）|
 
 ## 📚 文档
 
-完整设计文档在 [docs/v3-design.md](docs/v3-design.md)。
+- 完整设计文档：[docs/v3-design.md](docs/v3-design.md)
+- 施工文档：[docs/施工/](docs/施工/)
 
-## 🚧 项目状态
+## ✅ 当前状态（路径 X MVP · P1-P5 完成）
 
-**v3.0 设计阶段**（8-10 起 · 锡哥拍板）
+- ✅ connector 5 action + operator 33 action + hub 6 action + 5 模板 + wrapper
+- ✅ `just smoke` 真实链路跑通（connector 接入 → operator 操作）
+- ✅ 5 个工作流模板（weibo-login / bilibili-up / wechat-article / slider-captcha / batch-fetch）
+- ⏳ P6：humanizer / monitor / recorder（验证码 / 反爬 / 录制）
 
-- ✅ 10 项关键决策已拍板
-- ✅ 总分架构设计完成
-- ✅ 9 个子 skill 职责划分
-- ✅ rbscript 工作流格式设计
-- 🔄 代码实现待启动
+## 🚀 快速开始
 
-## 🎬 实施路径
+### 前置依赖
 
-| 阶段 | 内容 | 工作量 |
-|---|---|---|
-| **MVP** | hub + connector + operator(核心 8 个) + runner + 5 模板 | ~30 小时 |
-| **完整 v3.0** | MVP + 18 个剩余 action + humanizer + anti-detect + recorder + extractor + state-mgr + monitor | ~62 小时 |
+1. **just**（任务执行器）：`/home/node/tools/bin/just`（或 `which just`）
+2. **CDP 浏览器**：Docker Chrome 可达（默认 `172.17.0.1:19222`，见 `config/browsers.yaml`）
+3. **PATH**：本项目 CLI 在 `bin/` 软链，模板已用 `./bin/` 前缀，**无需手动加 PATH**
+
+### 冒烟测试
+
+```bash
+cd browser-automation-platform
+just smoke                    # 裸跑（默认 browser=vps）
+just smoke browser=xiaobai    # 指定浏览器
+```
+
+### 运行工作流
+
+```bash
+just bilibili-up uid=12345          # B 站 UP 数据提取
+just weibo-login profile=vps        # 微博登录（需 ~/.bap/states/weibo-username 等）
+just wechat-article wechat_url="https://mp.weixin.qq.com/s/xxx"
+just batch-fetch batch_input="urls.txt"
+```
+
+### 直接调用 CLI
+
+```bash
+./bin/browser-connector list        # 列出浏览器
+./bin/browser-operator eval 'JSON.stringify({url: location.href})'
+./bin/browser-hub list              # 列出工作流
+```
+
+## 🛠 安装（软链到 ~/.agents/skills/）
+
+```bash
+bash install.sh --dry-run    # 预览（推荐先跑）
+bash install.sh              # 真软链 hub/connector/operator
+```
+
+> 注意：install.sh 默认**实执行**（软链 3 个已实现 skill）；`--dry-run` 仅预览不执行。
 
 ## 📂 项目位置
 
 - 仓库：`https://github.com/duckytan/browser-automation-platform`
-- 本地：`~/projects/browser-automation-platform/`
-
-## 📜 决策记录
-
-8-10 16:16 锡哥拍板 10 项决策，详见 [docs/v3-design.md §10](docs/v3-design.md)。
-
-## 📄 License
-
-MIT
-
----
-
-_项目 v3.0 · 2026-08-10 · 待实施_

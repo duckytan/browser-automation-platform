@@ -4,11 +4,13 @@
 list:
     @just --list
 
-# 冒烟测试：connector 接入 + operator 操作（真实链路 · P5 后可用）
+# 冒烟测试：connector 接入 + operator 操作（真实链路）
+# 用法: just smoke [browser=vps]  · 裸跑默认 vps，可用 just smoke browser=xiaobai
+browser := "vps"
 smoke:
-    @echo "🧪 BAP smoke: connector + operator 真实链路"
-    @browser-connector connect vps
-    @browser-operator eval 'JSON.stringify({url: location.href, title: document.title})'
+    @echo "🧪 BAP smoke: connector + operator 真实链路 (browser={{browser}})"; \
+    ./bin/browser-connector connect {{browser}}; \
+    ./bin/browser-operator eval 'JSON.stringify({url: location.href, title: document.title})'
 
 # 导入 5 个工作流模板（P2 填实际编排）
 import 'docs/references/examples/weibo-login.just'

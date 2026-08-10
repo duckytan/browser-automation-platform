@@ -2,18 +2,19 @@
 # 批量 URL 抓取
 # 编排：connector + operator + humanizer
 
-# 用法：just batch-fetch batch_input="urls.txt"
+# 用法：just batch-fetch batch_input="urls.txt" [browser=vps]
 batch_input := "urls.txt"
+bf_browser := "vps"
 
 # 批量 URL 抓取
 batch-fetch:
     # 1. 接入浏览器
-    @./engines/retry.sh 3 browser-connector connect --browser default
+    @./engines/retry.sh 3 ./bin/browser-connector connect --browser {{bf_browser}}
     # 2. 逐 URL 抓取
     @while read -r url; do \
         echo "抓取: $$url"; \
-        browser-operator nav --url "$$url"; \
-        browser-operator extract --selector "body" --output "/tmp/batch-$$(echo $$url | md5sum | cut -c1-8).html"; \
+        ./bin/browser-operator nav --url "$$url"; \
+        ./bin/browser-operator extract --selector "body" --output "/tmp/batch-$$(echo $$url | md5sum | cut -c1-8).html"; \
         # humanizer 随机间隔（P6 实现，先占位）\
         sleep 2; \
     done < {{batch_input}}
