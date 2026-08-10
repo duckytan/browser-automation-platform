@@ -15,7 +15,8 @@
 | **P2 Just 集成** | wrapper + 5 模板编排 + install.sh.example | ✅ **完成** | 锡哥 20:09 继续 · wrapper 测通 |
 | **P3 connector** | browser-connector 5 action + config | ✅ **完成** | 锡哥 21:05 继续 · 5 action 实测通过 |
 | **P4 operator** | browser-operator 33 action | ✅ **完成** | 锡哥 21:08 继续 · 26+ action 实测通过 |
-| P5 | hub | ⏳ 待命 | |
+| **P5 hub** | browser-hub 6 action + smoke 真实链路 | ✅ **完成** | 锡哥 21:27 继续 · smoke 端到端跑通 |
+| **路径 X MVP** | P1-P5 全部完成 | 🎉 **达成** | 22.1h/164K 估算 · 实际 ~1.5h |
 
 ---
 

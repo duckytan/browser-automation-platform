@@ -4,9 +4,11 @@
 list:
     @just --list
 
-# 冒烟测试：connector 接入 + operator 操作（骨架阶段 echo 占位，P5 后真实冒烟）
+# 冒烟测试：connector 接入 + operator 操作（真实链路 · P5 后可用）
 smoke:
-    @echo "BAP smoke: 骨架占位（P5 后 connector+operator 真实冒烟）"
+    @echo "🧪 BAP smoke: connector + operator 真实链路"
+    @browser-connector connect vps
+    @browser-operator eval 'JSON.stringify({url: location.href, title: document.title})'
 
 # 导入 5 个工作流模板（P2 填实际编排）
 import 'docs/references/examples/weibo-login.just'

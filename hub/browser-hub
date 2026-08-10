@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# BAP hub/browser-hub - 总控层（§6.3 · v3.2 改 Just · 合并 runner）
+# 用法: browser-hub <action>
+#   run <name>        执行 Just 工作流（调 justfile recipe）
+#   validate <name>   校验 justfile / 配置（不执行）
+#   template <name>   生成模板（weibo-login / bilibili-up / ...）
+#   schedule          计划任务（cron 形式）
+#   list              列出已注册工作流
+#   state             显示当前 context.json
+# 错误码: H001 recipe 不存在 · H002 just 未安装 · H003 模板缺失 · H004 配置校验失败
+
+set -uo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+JUSTFILE="$PROJECT_ROOT/justfile"
+CONTEXT_FILE="$PROJECT_ROOT/.bap/context.json"
+TEMPLATE_DIR="$PROJECT_ROOT/docs/references/examples"
+
+JUST_BIN=""
+for c in /home/node/tools/bin/just just; do
+    if command -v "$c" >/dev/null 2>&1; then JUST_BIN="$c"; break; fi
+done
+
+ensure_just() {
+    [[ -n "$JUST_BIN" ]] || { echo "❌ H002: just 未安装" >&2; exit 2; }
+}
+
+# === run: 执行工作流 ===
+hub_run() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && { echo "❌ H001: 用法 run <name>" >&2; exit 1; }
+    ensure_just
+    if ! "$JUST_BIN" --justfile "$JUSTFILE" --list 2>/dev/null | grep -qw "$name"; then
+        echo "❌ H001: 工作流 '$name' 不存在（可用: $(hub_list_names)）" >&2
+        exit 1
+    fi
+    # 记录上下文
+    mkdir -p "$(dirname "$CONTEXT_FILE")"
+    echo "{\"last_run\":\"$name\",\"ts\":\"$(date -u +%FT%TZ)\"}" > "$CONTEXT_FILE"
+    echo "▶ 执行工作流: $name"
+    "$JUST_BIN" --justfile "$JUSTFILE" "$name"
+}
+
+# === validate: 校验 ===
+hub_validate() {
+    local name="${1:-}"
+    ensure_just
+    echo "🔍 校验 justfile..."
+    if "$JUST_BIN" --justfile "$JUSTFILE" --list >/dev/null 2>&1; then
+        echo "  ✅ justfile 语法 OK"
+    else
+        echo "  ❌ H004: justfile 语法错误" >&2
+        exit 4
+    fi
+    if [[ -n "$name" ]]; then
+        if "$JUST_BIN" --justfile "$JUSTFILE" --list 2>/dev/null | grep -qw "$name"; then
+            echo "  ✅ recipe '$name' 存在"
+        else
+            echo "  ❌ H001: recipe '$name' 不存在" >&2
+            exit 1
+        fi
+    fi
+}
+
+# === template: 生成模板 ===
+hub_template() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && { echo "❌ H003: 用法 template <name>" >&2; exit 3; }
+    local tpl="$TEMPLATE_DIR/$name.just"
+    if [[ ! -f "$tpl" ]]; then
+        echo "❌ H003: 模板 '$name' 不存在（可用: $(ls "$TEMPLATE_DIR"/*.just 2>/dev/null | xargs -n1 basename | sed 's/.just//' | tr '\n' ' ')）" >&2
+        exit 3
+    fi
+    echo "📄 模板 $name.just:"
+    cat "$tpl"
+}
+
+# === schedule: 计划任务 ===
+hub_schedule() {
+    echo "🗓 计划任务（cron 形式）:"
+    echo "  BAP 支持通过 OpenClaw cron 调度 browser-hub run <name>"
+    echo "  示例 cron: openclaw cron add --name bap-bilibili --schedule '0 9 * * *' -- browser-hub run bilibili-up"
+    echo "  （当前无已注册 schedule，待锡哥配置）"
+}
+
+# === list: 列出工作流 ===
+hub_list() {
+    ensure_just
+    echo "📋 已注册工作流（justfile + 模板）:"
+    echo ""
+    echo "  [Just recipes]"
+    "$JUST_BIN" --justfile "$JUSTFILE" --list 2>/dev/null | sed 's/^/    /'
+    echo ""
+    echo "  [模板文件]"
+    for f in "$TEMPLATE_DIR"/*.just; do
+        [[ -f "$f" ]] && echo "    - $(basename "$f" .just)"
+    done
+}
+
+# === state: 显示 context ===
+hub_state() {
+    echo "🗂 当前上下文 (context.json):"
+    if [[ -f "$CONTEXT_FILE" ]]; then
+        cat "$CONTEXT_FILE"
+        echo ""
+    else
+        echo "  （无 context.json，尚未运行过工作流）"
+    fi
+    echo ""
+    echo "  当前连接浏览器: $(cat "$PROJECT_ROOT/.bap/state/current-browser" 2>/dev/null || echo 无)"
+}
+
+# === helper: 列出 recipe 名 ===
+hub_list_names() {
+    ensure_just
+    "$JUST_BIN" --justfile "$JUSTFILE" --list 2>/dev/null | grep -oE '^\s+[a-z-]+' | tr -d ' ' | tr '\n' ' '
+}
+
+# === 入口 ===
+ACTION="${1:-}"; shift 2>/dev/null || true
+case "$ACTION" in
+    run) hub_run "$@" ;;
+    validate) hub_validate "$@" ;;
+    template) hub_template "$@" ;;
+    schedule) hub_schedule ;;
+    list) hub_list ;;
+    state) hub_state ;;
+    "")
+        echo "用法: browser-hub <action>"
+        echo "  run <name> / validate <name> / template <name> / schedule / list / state"
+        exit 0
+        ;;
+    *) echo "❌ 未知 action: $ACTION" >&2; exit 1 ;;
+esac
