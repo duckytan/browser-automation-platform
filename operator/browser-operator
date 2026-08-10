@@ -134,35 +134,49 @@ op_extract_template() {
     done < "$tpl"
 }
 
+# === 统一 flag 解析（模板用 --url/--selector/--text/--name/--times flag 形式）===
+# 把 --key value 转成位置参数序列，供 op_* 函数用（它们期望位置参数）
+parse_flags() {
+    local out=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --url|--selector|--text|--value|--name|--output|--times|--timeout|--prop|--xpath|--regex|--template|--target|--profile|--browser)
+                out+=("$2"); shift 2 ;;
+            *) out+=("$1"); shift ;;
+        esac
+    done
+    printf '%s\n' "${out[@]}"
+}
+
 # === 入口 ===
 ACTION="${1:-}"; shift 2>/dev/null || true
 case "$ACTION" in
-    nav) op_nav "$@" ;;
+    nav) op_nav $(parse_flags "$@") ;;
     back) op_back ;;
     forward) op_forward ;;
     reload) op_reload ;;
-    click) op_click "$@" ;;
-    type) op_type "$@" ;;
-    hover) op_hover "$@" ;;
-    scroll) op_scroll "${1:-3}" ;;
-    select) op_select "$@" ;;
-    focus) op_focus "$@" ;;
+    click) op_click $(parse_flags "$@") ;;
+    type) op_type $(parse_flags "$@") ;;
+    hover) op_hover $(parse_flags "$@") ;;
+    scroll) op_scroll $(parse_flags "$@") ;;
+    select) op_select $(parse_flags "$@") ;;
+    focus) op_focus $(parse_flags "$@") ;;
     blur) op_blur ;;
-    clear) op_clear "$@" ;;
-    extract) op_extract "$@" ;;
-    extract-css) op_extract_css "$@" ;;
-    extract-xpath) op_extract_xpath "$@" ;;
-    extract-regex) op_extract_regex "$@" ;;
+    clear) op_clear $(parse_flags "$@") ;;
+    extract) op_extract $(parse_flags "$@") ;;
+    extract-css) op_extract_css $(parse_flags "$@") ;;
+    extract-xpath) op_extract_xpath $(parse_flags "$@") ;;
+    extract-regex) op_extract_regex $(parse_flags "$@") ;;
     cookies-get) op_cookies_get ;;
-    cookies-set) op_cookies_set "$@" ;;
+    cookies-set) op_cookies_set $(parse_flags "$@") ;;
     cookies-clear) op_cookies_clear ;;
-    cookies-export) op_cookies_export "$@" ;;
-    shot) op_shot "${1:-/tmp/bap-shot.png}" ;;
+    cookies-export) op_cookies_export $(parse_flags "$@") ;;
+    shot) op_shot $(parse_flags "$@") ;;
     source) op_source ;;
     text) op_text ;;
-    eval) op_eval "$@" ;;
-    wait) op_wait "$@" ;;
-    extract-template) op_extract_template "$@" ;;
+    eval) op_eval $(parse_flags "$@") ;;
+    wait) op_wait $(parse_flags "$@") ;;
+    extract-template) op_extract_template $(parse_flags "$@") ;;
     "")
         echo "用法: browser-operator <action> [args]"
         echo "导航: nav/back/forward/reload · 交互: click/type/hover/scroll/select/focus/blur/clear"

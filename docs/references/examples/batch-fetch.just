@@ -1,15 +1,11 @@
-# docs/references/examples/batch-fetch.just (v3.2 · Just 工作流模板 · P2 编排)
+# docs/references/examples/batch-fetch.just (v3.2 · Just 工作流模板 · 参数版)
 # 批量 URL 抓取
 # 编排：connector + operator + humanizer
 
-# 用法：just batch-fetch batch_input="urls.txt" [browser=vps]
-batch_input := "urls.txt"
-bf_browser := "vps"
-
-# 批量 URL 抓取
-batch-fetch:
+# 用法：just batch-fetch [batch_input=urls.txt] [browser=vps]
+batch-fetch batch_input="urls.txt" browser="vps":
     # 1. 接入浏览器
-    @./engines/retry.sh 3 ./bin/browser-connector connect --browser {{bf_browser}}
+    @./engines/retry.sh 3 ./bin/browser-connector connect --browser {{browser}}
     # 2. 逐 URL 抓取
     @while read -r url; do \
         echo "抓取: $$url"; \

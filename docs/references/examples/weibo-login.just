@@ -1,12 +1,12 @@
-# docs/references/examples/weibo-login.just (v3.2 · Just 工作流模板 · P2 编排)
+# docs/references/examples/weibo-login.just (v3.2 · Just 工作流模板 · 参数版)
 # 微博自动登录 + 验证码处理 + 保存 cookie
 # 编排：connector + operator + humanizer + monitor + state-tool
 
-# 用法：just weibo-login profile=vps
-profile := "vps"
+# 用法：just weibo-login [profile=vps]
+# 参数（just recipe 参数 · 默认 vps · 命令行可覆盖）
 
 # 微博登录工作流
-weibo-login:
+weibo-login profile="vps":
     # 1. 接入浏览器（connector.connect）
     @./engines/retry.sh 3 ./bin/browser-connector connect --browser {{profile}}
     # 2. 导航到微博登录页（operator.nav）

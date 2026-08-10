@@ -55,10 +55,17 @@ action_discover() {
 }
 
 # === connect: 连接指定浏览器（写入状态）===
+# 支持: connect vps / connect --browser vps
 action_connect() {
-    local browser="${1:-}"
+    local browser=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --browser) browser="$2"; shift 2 ;;
+            *) browser="$1"; shift ;;
+        esac
+    done
     if [[ -z "$browser" ]]; then
-        echo "❌ E002: 用法 connect <browser>（xiaobai/dasheng/vps）" >&2
+        echo "❌ E002: 用法 connect <browser>（xiaobai/dasheng/vps）或 connect --browser <browser>" >&2
         exit 2
     fi
     # 健康检查目标端点
